@@ -40,14 +40,21 @@ export const authConfig = {
   ],
   callbacks: {
     async jwt({ token, user }) {
+      // `user` is only present on initial sign-in. We snapshot the
+      // super-admin flag onto the JWT then; flipping it later requires the
+      // user to sign out and back in (acceptable for a rarely-changed
+      // platform-level flag).
       if (user) {
         token.id = user.id;
+        token.isSuperAdmin =
+          (user as { isSuperAdmin?: boolean }).isSuperAdmin ?? false;
       }
       return token;
     },
     async session({ session, token }) {
       if (token.id && session.user) {
         session.user.id = token.id as string;
+        session.user.isSuperAdmin = Boolean(token.isSuperAdmin);
       }
       return session;
     },

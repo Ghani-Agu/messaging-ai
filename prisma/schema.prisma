@@ -51,7 +51,8 @@ model Tenant {
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
-  members TenantUser[]
+  members         TenantUser[]
+  lastUsedByUsers User[]       @relation("UserLastTenant")
 
   @@index([slug])
 }
@@ -62,12 +63,20 @@ model User {
   emailVerified DateTime? // NextAuth
   name          String?
   imageUrl      String?
+  // Platform-level admin flag — gates the /admin super-admin route. Toggled
+  // out-of-band (e.g. via prisma studio); no self-service surface in v1.
+  isSuperAdmin  Boolean      @default(false)
+  // Most-recently-active workspace, set on tenant switch and consulted by
+  // /post-auth to decide where to land the user. Cleared if the tenant is
+  // deleted (SetNull rather than Cascade).
+  lastUsedTenantId String?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
-  tenants  TenantUser[]
-  accounts Account[]
-  sessions Session[]
+  tenants        TenantUser[]
+  accounts       Account[]
+  sessions       Session[]
+  lastUsedTenant Tenant?      @relation("UserLastTenant", fields: [lastUsedTenantId], references: [id], onDelete: SetNull)
 
   @@index([email])
 }
