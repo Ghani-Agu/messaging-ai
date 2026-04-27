@@ -13,12 +13,10 @@ import {
 } from "@/server/db/tenancy";
 import { requireTenantContext } from "@/server/tenancy/context";
 import { slugSchema, tenantNameSchema } from "@/lib/slug";
-
-export type CreateTenantState =
-  | { status: "idle" }
-  | { status: "error"; field?: "name" | "slug" | "form"; message: string };
-
-const initial: CreateTenantState = { status: "idle" };
+import type {
+  CreateTenantState,
+  UpdateTenantState,
+} from "@/server/tenancy/state";
 
 export async function createTenantAction(
   _prev: CreateTenantState,
@@ -79,8 +77,6 @@ export async function createTenantAction(
   redirect(`/${tenantSlug}/dashboard`);
 }
 
-export { initial as createTenantInitialState };
-
 const switchSchema = z.object({
   tenantId: z.string().min(1),
   slug: z.string().min(1),
@@ -109,13 +105,6 @@ export async function switchWorkspaceAction(formData: FormData): Promise<void> {
   });
   redirect(`/${parsed.data.slug}/dashboard`);
 }
-
-export type UpdateTenantState =
-  | { status: "idle" }
-  | { status: "saved" }
-  | { status: "error"; field?: "name"; message: string };
-
-export const updateTenantInitialState: UpdateTenantState = { status: "idle" };
 
 const updateTenantSchema = z.object({
   tenantSlug: z.string().min(1),

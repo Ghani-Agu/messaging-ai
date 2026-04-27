@@ -2,11 +2,11 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
+import { updateTenantNameAction } from "@/server/tenancy/actions";
 import {
-  updateTenantNameAction,
   updateTenantInitialState,
   type UpdateTenantState,
-} from "@/server/tenancy/actions";
+} from "@/server/tenancy/state";
 import { cn } from "@/lib/utils";
 
 export function WorkspaceNameForm({

@@ -4,17 +4,16 @@ import { motion } from "framer-motion";
 import { useActionState, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { MagneticButton } from "@/components/auth/magnetic-button";
-import {
-  createTenantAction,
-  type CreateTenantState,
-} from "@/server/tenancy/actions";
+import { createTenantAction } from "@/server/tenancy/actions";
+import { createTenantInitialState } from "@/server/tenancy/state";
 import { suggestSlug } from "@/lib/slug";
 import { durationMedium, easeOutExpo } from "@/lib/motion";
 
-const initial: CreateTenantState = { status: "idle" };
-
 export function CreateTenantCard({ userEmail }: { userEmail: string | null }) {
-  const [state, formAction, pending] = useActionState(createTenantAction, initial);
+  const [state, formAction, pending] = useActionState(
+    createTenantAction,
+    createTenantInitialState,
+  );
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   // Track whether the user has manually edited the slug; once they have, we
