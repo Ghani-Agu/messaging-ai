@@ -39,7 +39,7 @@ export default async function TenantLayout({
         user={{
           name: ctx.user.name,
           email: ctx.user.email,
-          imageUrl: ctx.user.imageUrl,
+          image: ctx.user.image,
           isSuperAdmin: ctx.user.isSuperAdmin,
         }}
       />

@@ -69,7 +69,7 @@ function MemberRow({
   return (
     <li className="flex items-center gap-4 bg-[var(--bg-surface)] px-5 py-4">
       <MemberAvatar
-        src={member.user.imageUrl ?? null}
+        src={member.user.image ?? null}
         initials={initials}
         alt=""
       />

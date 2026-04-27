@@ -13,7 +13,7 @@ type SidebarProps = {
   user: {
     name: string | null;
     email: string | null;
-    imageUrl: string | null;
+    image: string | null;
     isSuperAdmin: boolean;
   };
 };

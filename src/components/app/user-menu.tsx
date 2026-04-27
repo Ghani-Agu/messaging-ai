@@ -13,7 +13,7 @@ export function UserMenu({
   user: {
     name: string | null;
     email: string | null;
-    imageUrl: string | null;
+    image: string | null;
     isSuperAdmin: boolean;
   };
 }) {
@@ -30,10 +30,10 @@ export function UserMenu({
         )}
         aria-label="Open user menu"
       >
-        {user.imageUrl ? (
+        {user.image ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={user.imageUrl}
+            src={user.image}
             alt=""
             className="size-7 shrink-0 rounded-full object-cover"
           />

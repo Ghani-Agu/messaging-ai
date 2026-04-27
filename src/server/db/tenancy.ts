@@ -111,7 +111,7 @@ export type TenantMember = {
     id: string;
     name: string | null;
     email: string | null;
-    imageUrl: string | null;
+    image: string | null;
   };
 };
 
@@ -130,7 +130,7 @@ export async function listTenantMembers(
       role: true,
       createdAt: true,
       user: {
-        select: { id: true, name: true, email: true, imageUrl: true },
+        select: { id: true, name: true, email: true, image: true },
       },
     },
     orderBy: [{ createdAt: "asc" }],

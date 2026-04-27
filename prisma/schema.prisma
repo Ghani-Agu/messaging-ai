@@ -62,7 +62,7 @@ model User {
   email         String       @unique
   emailVerified DateTime? // NextAuth
   name          String?
-  imageUrl      String?
+  image         String?
   // Platform-level admin flag — gates the /admin super-admin route. Toggled
   // out-of-band (e.g. via prisma studio); no self-service surface in v1.
   isSuperAdmin  Boolean      @default(false)

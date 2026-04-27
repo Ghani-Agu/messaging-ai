@@ -17,7 +17,7 @@ export type TenantContext = {
     id: string;
     email: string | null;
     name: string | null;
-    imageUrl: string | null;
+    image: string | null;
     isSuperAdmin: boolean;
   };
   tenant: {
@@ -90,7 +90,7 @@ const resolveContext = cache(async (slug: string): Promise<TenantContext> => {
           id: true,
           email: true,
           name: true,
-          imageUrl: true,
+          image: true,
           isSuperAdmin: true,
         },
       },
