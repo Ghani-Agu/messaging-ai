@@ -4,6 +4,7 @@ import { auth } from "@/server/auth";
 import { getRoutingUser } from "@/server/db/tenancy";
 import { getTenantContext } from "@/server/tenancy/context";
 import { Sidebar } from "@/components/app/sidebar";
+import { CommandPalette } from "@/components/app/command-palette";
 
 type LayoutParams = { tenantSlug: string };
 
@@ -43,6 +44,12 @@ export default async function TenantLayout({
         }}
       />
       <main className="flex-1 overflow-y-auto">{children}</main>
+      <CommandPalette
+        tenantSlug={ctx.tenant.slug}
+        currentTenantId={ctx.tenant.id}
+        memberships={memberships}
+        user={{ isSuperAdmin: ctx.user.isSuperAdmin }}
+      />
     </div>
   );
 }
