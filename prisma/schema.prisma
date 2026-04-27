@@ -1,0 +1,127 @@
+// Prisma schema — multi-tenancy foundation (Phase 1)
+// Phase 1 scope: Tenant, User, TenantUser + NextAuth tables (Account,
+// Session, VerificationToken). Phase 2 will use the NextAuth tables; later
+// phases add Channel, Customer, Conversation, Message, KnowledgeSource,
+// KnowledgeChunk, Escalation, AuditLog, UsageRecord per MASTER_PLAN §6.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+// =====================================================================
+// Multi-tenancy core
+// =====================================================================
+
+enum Role {
+  OWNER
+  ADMIN
+  AGENT
+  VIEWER
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PRO
+  BUSINESS
+}
+
+model Tenant {
+  id               String       @id @default(cuid())
+  slug             String       @unique
+  name             String
+  logoUrl          String?
+  accentColor      String? // hex; falls back to design-system violet at the app layer
+  plan             Plan         @default(FREE)
+  stripeCustomerId String?      @unique
+  settings         Json         @default("{}")
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  members TenantUser[]
+
+  @@index([slug])
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  emailVerified DateTime? // NextAuth
+  name          String?
+  imageUrl      String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  tenants  TenantUser[]
+  accounts Account[]
+  sessions Session[]
+
+  @@index([email])
+}
+
+model TenantUser {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      Role     @default(OWNER)
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@index([tenantId])
+}
+
+// =====================================================================
+// NextAuth — wired now so Phase 2 doesn't need a schema migration on day 1
+// (https://authjs.dev/getting-started/adapters/prisma)
+// =====================================================================
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
