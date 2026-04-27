@@ -1,0 +1,13 @@
+# Normalize text files to LF in the repo; tools restore CRLF on checkout if needed.
+* text=auto eol=lf
+
+# Binaries
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
