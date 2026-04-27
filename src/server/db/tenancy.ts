@@ -102,3 +102,56 @@ export async function setLastUsedTenant(args: {
     data: { lastUsedTenantId: args.tenantId },
   });
 }
+
+export type TenantMember = {
+  id: string;
+  role: Role;
+  joinedAt: Date;
+  user: {
+    id: string;
+    name: string | null;
+    email: string | null;
+    imageUrl: string | null;
+  };
+};
+
+/**
+ * List all members of a tenant. Sort: OWNERs first, then by join date so the
+ * earliest collaborators float to the top — a stable order that's friendlier
+ * than alphabetical when teams are small.
+ */
+export async function listTenantMembers(
+  tenantId: string,
+): Promise<TenantMember[]> {
+  const rows = await prisma.tenantUser.findMany({
+    where: { tenantId },
+    select: {
+      id: true,
+      role: true,
+      createdAt: true,
+      user: {
+        select: { id: true, name: true, email: true, imageUrl: true },
+      },
+    },
+    orderBy: [{ createdAt: "asc" }],
+  });
+  // Pull OWNERs to the top while preserving join order within each role.
+  const owners = rows.filter((r) => r.role === "OWNER");
+  const rest = rows.filter((r) => r.role !== "OWNER");
+  return [...owners, ...rest].map((r) => ({
+    id: r.id,
+    role: r.role,
+    joinedAt: r.createdAt,
+    user: r.user,
+  }));
+}
+
+export async function updateTenantName(args: {
+  tenantId: string;
+  name: string;
+}): Promise<void> {
+  await prisma.tenant.update({
+    where: { id: args.tenantId },
+    data: { name: args.name },
+  });
+}

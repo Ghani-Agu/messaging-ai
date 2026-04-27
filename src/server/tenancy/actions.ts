@@ -4,11 +4,14 @@ import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { auth } from "@/server/auth";
+import { revalidatePath } from "next/cache";
 import {
   createTenantWithOwner,
   isSlugAvailable,
   setLastUsedTenant,
+  updateTenantName,
 } from "@/server/db/tenancy";
+import { requireTenantContext } from "@/server/tenancy/context";
 import { slugSchema, tenantNameSchema } from "@/lib/slug";
 
 export type CreateTenantState =
@@ -105,4 +108,44 @@ export async function switchWorkspaceAction(formData: FormData): Promise<void> {
     tenantId: parsed.data.tenantId,
   });
   redirect(`/${parsed.data.slug}/dashboard`);
+}
+
+export type UpdateTenantState =
+  | { status: "idle" }
+  | { status: "saved" }
+  | { status: "error"; field?: "name"; message: string };
+
+export const updateTenantInitialState: UpdateTenantState = { status: "idle" };
+
+const updateTenantSchema = z.object({
+  tenantSlug: z.string().min(1),
+  name: tenantNameSchema,
+});
+
+/**
+ * Update the workspace name. ADMIN role floor — agents and viewers can read
+ * settings but not change them. (OWNER is implicitly allowed via the rank.)
+ */
+export async function updateTenantNameAction(
+  _prev: UpdateTenantState,
+  formData: FormData,
+): Promise<UpdateTenantState> {
+  const parsed = updateTenantSchema.safeParse({
+    tenantSlug: formData.get("tenantSlug"),
+    name: formData.get("name"),
+  });
+  if (!parsed.success) {
+    return {
+      status: "error",
+      field: "name",
+      message: parsed.error.issues[0]?.message ?? "Invalid workspace name.",
+    };
+  }
+  const ctx = await requireTenantContext(parsed.data.tenantSlug, {
+    minRole: "ADMIN",
+  });
+  await updateTenantName({ tenantId: ctx.tenant.id, name: parsed.data.name });
+  // Refresh the sidebar / switcher copy that pulls the tenant name.
+  revalidatePath(`/${ctx.tenant.slug}`, "layout");
+  return { status: "saved" };
 }
