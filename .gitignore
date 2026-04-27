@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/install-state.gz
+
+# Build artifacts
+.next/
+out/
+build/
+dist/
+
+# Production
+*.tsbuildinfo
+next-env.d.ts
+
+# Env files (only .env.example is committed)
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Prisma — generated client only; schema and migrations are committed
+src/generated/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# Testing
+coverage/
+.nyc_output/
+
+# Vercel
+.vercel
+
+# Sentry
+.sentryclirc
+
+# Local Docker volumes
+docker-data/
