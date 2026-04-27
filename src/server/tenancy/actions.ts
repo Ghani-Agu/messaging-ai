@@ -2,10 +2,12 @@
 
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
 import { auth } from "@/server/auth";
 import {
   createTenantWithOwner,
   isSlugAvailable,
+  setLastUsedTenant,
 } from "@/server/db/tenancy";
 import { slugSchema, tenantNameSchema } from "@/lib/slug";
 
@@ -75,3 +77,32 @@ export async function createTenantAction(
 }
 
 export { initial as createTenantInitialState };
+
+const switchSchema = z.object({
+  tenantId: z.string().min(1),
+  slug: z.string().min(1),
+});
+
+/**
+ * Update the user's lastUsedTenantId and redirect to the chosen workspace.
+ * Called from the workspace switcher dropdown. setLastUsedTenant is a no-op
+ * if the user isn't a member of the target tenant — they still get
+ * redirected, but the tenant layout will then 404 them, which is the
+ * correct behavior for tampered IDs.
+ */
+export async function switchWorkspaceAction(formData: FormData): Promise<void> {
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+
+  const parsed = switchSchema.safeParse({
+    tenantId: formData.get("tenantId"),
+    slug: formData.get("slug"),
+  });
+  if (!parsed.success) redirect("/post-auth");
+
+  await setLastUsedTenant({
+    userId: session.user.id,
+    tenantId: parsed.data.tenantId,
+  });
+  redirect(`/${parsed.data.slug}/dashboard`);
+}

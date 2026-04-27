@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { signIn } from "@/server/auth";
+import { signIn, signOut } from "@/server/auth";
 
 const emailSchema = z
   .string()
@@ -33,4 +33,8 @@ export async function signInWithEmail(
   // /verify-request. Errors that aren't redirects bubble up.
   await signIn("resend", { email: parsed.data, redirectTo: "/post-auth" });
   return { status: "idle" };
+}
+
+export async function signOutAction(): Promise<void> {
+  await signOut({ redirectTo: "/login" });
 }
