@@ -13,7 +13,12 @@ datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
   directUrl  = env("DIRECT_DATABASE_URL")
-  extensions = [pgvector(map: "vector")]
+  // `vector` is pgvector — the only extension our code actively uses (Phase 3
+  // embeddings); Supabase installs it in `public`. The other four are
+  // pre-installed by Supabase across two dedicated schemas: the standard
+  // utilities live in `extensions`, and `supabase_vault` lives in `vault`.
+  // Schema annotations match the actual DB layout so drift detection passes.
+  extensions = [pg_stat_statements(schema: "extensions"), pgcrypto(schema: "extensions"), supabase_vault(schema: "vault"), uuid_ossp(map: "uuid-ossp", schema: "extensions"), vector]
 }
 
 // =====================================================================
