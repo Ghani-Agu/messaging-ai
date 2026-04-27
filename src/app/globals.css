@@ -219,3 +219,31 @@ body {
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
+
+/* =========================================================================
+   Theme-switch transition (CSS-variable fallback)
+
+   Browsers without document.startViewTransition (Firefox today, older
+   Safari) fall back to this: useThemeSwitcher() adds the
+   `.theme-transitioning` class for ~220ms during a theme change, then
+   removes it. While the class is on, every element animates between the
+   old and new color tokens with a 200ms ease-out-expo curve. We only
+   transition color-related properties so day-to-day hover states keep
+   their snappy 150ms timings and don't double-animate.
+
+   Respects prefers-reduced-motion: users who opt out get an instant swap.
+   ========================================================================= */
+
+@media (prefers-reduced-motion: no-preference) {
+  .theme-transitioning,
+  .theme-transitioning *,
+  .theme-transitioning *::before,
+  .theme-transitioning *::after {
+    transition:
+      background-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      fill 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      stroke 200ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+  }
+}

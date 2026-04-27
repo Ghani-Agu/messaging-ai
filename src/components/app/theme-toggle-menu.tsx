@@ -2,7 +2,7 @@
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, Laptop, Moon, Sun, type LucideIcon } from "lucide-react";
-import { useTheme } from "next-themes";
+import { useThemeSwitcher } from "@/hooks/use-theme-switcher";
 import { cn } from "@/lib/utils";
 
 type Option = { value: "light" | "dark" | "system"; label: string; icon: LucideIcon };
@@ -19,7 +19,7 @@ const OPTIONS: Option[] = [
  * this is the menu-friendly variant.
  */
 export function ThemeToggleSubmenu() {
-  const { theme, setTheme, resolvedTheme } = useTheme();
+  const { theme, switchTheme, resolvedTheme } = useThemeSwitcher();
   const current = theme ?? resolvedTheme ?? "system";
 
   return (
@@ -56,7 +56,7 @@ export function ThemeToggleSubmenu() {
             return (
               <DropdownMenu.Item
                 key={opt.value}
-                onSelect={() => setTheme(opt.value)}
+                onSelect={() => switchTheme(opt.value)}
                 className={cn(
                   "flex items-center gap-2 rounded-md px-2 py-1.5 text-body-sm",
                   "transition-colors duration-150 ease-out",

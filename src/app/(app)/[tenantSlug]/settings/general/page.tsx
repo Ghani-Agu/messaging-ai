@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { getTenantContext } from "@/server/tenancy/context";
 import { WorkspaceNameForm } from "@/components/app/workspace-name-form";
+import { ThemePicker } from "@/components/ui/theme-picker";
 
 export const metadata: Metadata = { title: "Settings · General" };
 
@@ -45,9 +46,10 @@ export default async function GeneralSettingsPage({
         <h2 id="theme-heading" className="mb-4 text-h4 text-[var(--text-primary)]">
           Theme
         </h2>
-        <p className="text-body-sm text-[var(--text-secondary)]">
-          Use the theme picker in the user menu (bottom-left of the sidebar)
-          to switch between Light, Dark, and System.
+        <ThemePicker />
+        <p className="mt-2 text-body-sm text-[var(--text-tertiary)]">
+          System matches your OS setting. Switching is also available in the
+          user menu (bottom-left of the sidebar).
         </p>
       </section>
     </div>
