@@ -72,13 +72,9 @@ Workflow per phase:
 
 ---
 
-## 5. Pending local-machine setup
+## 5. Local development environment
 
-Tracked here so future sessions don't re-derive it.
-
-- [ ] **Docker Desktop** — not installed; no longer blocking. The dev database is now Supabase (configured in Phase 2), so the local Postgres+Redis Compose stack is optional. Install Docker only if/when we need a fully offline dev loop or local Redis (BullMQ, Phase 3+). The Compose file in repo still works as-is; just `docker compose up -d` when ready.
-
-When this list is empty, delete this section.
+Local dev uses Supabase exclusively for Postgres (and any future Redis / queue infrastructure will be sourced from a hosted provider too) — Docker Desktop is not required for any phase through 10.
 
 ---
 

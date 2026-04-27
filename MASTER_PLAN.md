@@ -346,10 +346,12 @@ Conventions:
 
 Defined in `prisma/schema.prisma`. Multi-tenancy is row-level: every tenant-scoped model has a `tenantId`.
 
+> _Updated for Phase 2: User gained `isSuperAdmin` and `lastUsedTenantId`; Tenant gained the `lastUsedByUsers` reverse relation. The `User.imageUrl` field was renamed to `User.image` to match NextAuth's Prisma adapter._
+
 ### Core multi-tenancy
 
-- **Tenant** — a client company. Fields: `id`, `slug` (unique URL part), `name`, `logoUrl`, `accentColor`, `plan`, `stripeCustomerId`, `createdAt`, `settings` (JSON: business hours, escalation rules, brand voice config, default language, etc.)
-- **User** — a person. Fields: `id`, `email`, `name`, `imageUrl`, `createdAt`. NextAuth fields included.
+- **Tenant** — a client company. Fields: `id`, `slug` (unique URL part), `name`, `logoUrl`, `accentColor`, `plan`, `stripeCustomerId`, `createdAt`, `settings` (JSON: business hours, escalation rules, brand voice config, default language, etc.). Reverse relations: `lastUsedByUsers` (Users whose `lastUsedTenantId` points here; `onDelete: SetNull`).
+- **User** — a person. Fields: `id`, `email`, `name`, `image`, `isSuperAdmin` (Boolean, default `false` — gates the `/admin` super-admin route; toggled out-of-band, no self-service surface), `lastUsedTenantId` (String, optional — most-recently-active workspace, set on tenant switch and consulted by `/post-auth` to decide where to land the user), `createdAt`. NextAuth fields included.
 - **TenantUser** — join table. Fields: `id`, `tenantId`, `userId`, `role` (OWNER / ADMIN / AGENT / VIEWER), `createdAt`. Unique on `(tenantId, userId)`.
 
 ### Knowledge
