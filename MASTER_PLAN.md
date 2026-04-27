@@ -3,7 +3,7 @@
 **Project:** Multi-channel AI Messaging SaaS (working name: `messaging-ai`)
 **Owner:** Project lead (you)
 **Build assistant:** Claude Code (this document is the persistent source of truth across all sessions)
-**Last updated:** Day 0 — pre-build planning
+**Last updated:** Day 1 — end of Phase 1 (foundation). One deviation from §5 recorded with project-lead approval: Tailwind v4 is configured CSS-first via `@theme inline` in `src/app/globals.css`; there is no `tailwind.config.ts`.
 
 ---
 
@@ -246,8 +246,11 @@ messaging-ai/
 ├── package.json
 ├── tsconfig.json
 ├── next.config.mjs
-├── tailwind.config.ts
-├── postcss.config.mjs
+├── postcss.config.mjs                  # Tailwind v4 is configured CSS-first
+                                        # via @theme inline in app/globals.css —
+                                        # no tailwind.config.ts (Day-1 deviation,
+                                        # approved). Add one only if a v4 plugin
+                                        # later requires JS config.
 ├── prisma/
 │   ├── schema.prisma
 │   ├── migrations/
