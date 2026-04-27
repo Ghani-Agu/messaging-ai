@@ -93,3 +93,10 @@ Recorded in MASTER_PLAN §5. Summary:
 ## 7. Memory
 
 The user maintains a Claude Code memory store at `~/.claude/projects/.../memory/`. Relevant facts about the user's working preferences, the project, and recurring rules live there and are loaded automatically. Update memory when you learn something durable; do not duplicate facts that already exist in MASTER_PLAN or this file.
+
+
+## End-of-session protocol
+At the end of every session, before yielding control:
+1. Stage and commit any uncommitted changes
+2. Print a summary including: files created, files modified, packages installed, migrations run, commits made (hash + message), and any issues encountered or deferred
+3. Note any decisions made that should be reflected in MASTER_PLAN.md
