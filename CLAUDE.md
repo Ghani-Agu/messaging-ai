@@ -76,13 +76,60 @@ Workflow per phase:
 
 Tracked here so future sessions don't re-derive it.
 
-- [ ] **Docker Desktop** — not installed yet on this machine. Phase 1 includes a working `docker-compose.yml` (Postgres+pgvector + Redis) but the boot test was deferred. Once Docker Desktop is installed, run `docker compose up -d`, then `npx prisma migrate dev --name init`, then `npm run db:seed`. The demo page at `/` works fine without Docker.
+- [ ] **Docker Desktop** — not installed; no longer blocking. The dev database is now Supabase (configured in Phase 2), so the local Postgres+Redis Compose stack is optional. Install Docker only if/when we need a fully offline dev loop or local Redis (BullMQ, Phase 3+). The Compose file in repo still works as-is; just `docker compose up -d` when ready.
 
 When this list is empty, delete this section.
 
 ---
 
-## 6. Phase-1 deviations from MASTER_PLAN
+## 6. Setup gotchas
+
+Things that bit us once and would bite again. Read before fighting tooling.
+
+### Supabase: direct host is IPv6-only on the free tier
+
+`db.<project>.supabase.co` resolves to IPv6 only on the free plan. Most home/ISP networks (and Windows + most VPNs) can't reach it. Symptom: Prisma migrations fail with `P1001: Can't reach database server`.
+
+Fix: both `DATABASE_URL` and `DIRECT_DATABASE_URL` must use the **pooler** hostname (`aws-<n>-<region>.pooler.supabase.com`), just on different ports:
+
+| Var | Port | Mode | Required params |
+|---|---|---|---|
+| `DATABASE_URL` | 6543 | transaction (pgbouncer) | `?pgbouncer=true&connection_limit=1` |
+| `DIRECT_DATABASE_URL` | 5432 | session | none |
+
+Username on both is `postgres.<project_ref>` (the form with the dot). Password is the same. Copy from Supabase Dashboard → Project Settings → Database → "Connection string" → Session pooler / Transaction pooler tabs.
+
+### Supabase: pre-installed extensions cause Prisma drift
+
+Supabase pre-installs five extensions across three schemas: `pg_stat_statements`, `pgcrypto`, `uuid-ossp` in `extensions`; `supabase_vault` in `vault`; `vector` (pgvector) in `public`. If `prisma/schema.prisma` doesn't declare them with the right schema annotations, `prisma migrate dev` reports drift and wants to reset the public schema.
+
+What works:
+
+```
+extensions = [
+  pg_stat_statements(schema: "extensions"),
+  pgcrypto(schema: "extensions"),
+  supabase_vault(schema: "vault"),
+  uuid_ossp(map: "uuid-ossp", schema: "extensions"),
+  vector
+]
+```
+
+(Single line in the actual schema.prisma — Prisma's parser doesn't accept multi-line array literals here.)
+
+Plus: the init migration's SQL must `CREATE SCHEMA IF NOT EXISTS "extensions"` and `CREATE SCHEMA IF NOT EXISTS "vault"` **before** the `CREATE EXTENSION ... WITH SCHEMA` statements — Prisma's shadow database is bare, so it needs those schemas to exist before extensions can be installed into them. Otherwise the shadow replay fails with `P3006`.
+
+`scripts/inspect-extensions.mjs` lists every extension and its schema as installed on the live DB — useful for diagnosing future drift.
+
+### Prisma + .env.local
+
+Prisma's CLI only reads `.env`, not Next.js's `.env.local`. All `db:*` npm scripts wrap with `dotenv -e .env.local --` so they pick up the right URLs. Don't run bare `prisma migrate dev` — use `npm run db:migrate` instead.
+
+When this section grows large, group by tool.
+
+---
+
+## 7. Phase-1 deviations from MASTER_PLAN
 
 Recorded in MASTER_PLAN §5. Summary:
 
@@ -90,12 +137,12 @@ Recorded in MASTER_PLAN §5. Summary:
 
 ---
 
-## 7. Memory
+## 8. Memory
 
 The user maintains a Claude Code memory store at `~/.claude/projects/.../memory/`. Relevant facts about the user's working preferences, the project, and recurring rules live there and are loaded automatically. Update memory when you learn something durable; do not duplicate facts that already exist in MASTER_PLAN or this file.
 
 
-## End-of-session protocol
+## 9. End-of-session protocol
 At the end of every session, before yielding control:
 1. Stage and commit any uncommitted changes
 2. Print a summary including: files created, files modified, packages installed, migrations run, commits made (hash + message), and any issues encountered or deferred
