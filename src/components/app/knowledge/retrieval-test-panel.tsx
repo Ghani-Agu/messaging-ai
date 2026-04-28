@@ -20,6 +20,19 @@ const TYPE_ICON = {
   MANUAL: Pencil,
 } as const;
 
+/**
+ * ts_rank legitimately returns values like 1e-16; toFixed(2) renders those
+ * as "0.00", which reads as "near-zero noise" to nobody. Show "<0.01"
+ * instead so the chip stays narrow and the meaning is clear. Same threshold
+ * applied to vector scores for visual consistency, even though they almost
+ * never go that low.
+ */
+function formatScore(score: number | null): string {
+  if (score == null) return "—";
+  if (score > 0 && score < 0.01) return "<0.01";
+  return score.toFixed(2);
+}
+
 export function RetrievalTestPanel({ slug }: { slug: string }) {
   const [query, setQuery] = React.useState("");
   const [topK, setTopK] = React.useState(8);
@@ -113,16 +126,10 @@ export function RetrievalTestPanel({ slug }: { slug: string }) {
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5 text-caption">
                       <span className="rounded bg-[var(--bg-surface)] px-1.5 py-0.5 text-[var(--text-secondary)]">
-                        vec{" "}
-                        {h.vectorScore != null
-                          ? h.vectorScore.toFixed(2)
-                          : "—"}
+                        vec {formatScore(h.vectorScore)}
                       </span>
                       <span className="rounded bg-[var(--bg-surface)] px-1.5 py-0.5 text-[var(--text-secondary)]">
-                        lex{" "}
-                        {h.lexicalScore != null
-                          ? h.lexicalScore.toFixed(2)
-                          : "—"}
+                        lex {formatScore(h.lexicalScore)}
                       </span>
                       <span className="rounded bg-[var(--accent-base)]/15 px-1.5 py-0.5 text-[var(--accent-hover)]">
                         rrf {h.rrfScore.toFixed(4)}
