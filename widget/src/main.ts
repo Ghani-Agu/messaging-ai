@@ -1,15 +1,42 @@
 /**
- * Widget entry point — commit-2 state.
+ * Widget entry point — Phase-5 commit-3 state.
  *
- * Wires the generated tokens (widget/src/tokens.ts) as Shadow-DOM-scoped
- * CSS custom properties and injects the scoped stylesheet (styles.css)
- * inline. The full embed contract — reading data-key from the host
- * <script>, exposing window.MessagingAI, subscribing to the bus — lands
- * in commit 3 alongside the component tree.
+ * Embed contract:
+ *   <script src="…/widget.js" data-key="wgt_pk_…" async></script>
+ *
+ * On mount:
+ *   1. Read data-key from document.currentScript (the host page's tag).
+ *   2. Create the host element + Shadow DOM root.
+ *   3. Inject tokens-as-CSS-vars + scoped styles.
+ *   4. Render <Widget /> with the resolved key.
+ *   5. Expose window.MessagingAI = { open, close, toggle, identify, destroy }
+ *      backed by the api-bus (component subscribes inside useEffect).
+ *
+ * The widget never reads tenant identity directly; the server resolves
+ * data-key → tenant via Channel.config when the widget channel is
+ * enabled (UI lands at integration). The displayed business name is a
+ * runtime placeholder until the server can return it on the first
+ * stream response — for the demo gate it ships hard-coded.
  */
 import { h, render } from "preact";
 import { tokens } from "./tokens";
 import styles from "./styles.css?inline";
+import { Widget } from "./Widget";
+import { dispatch as busDispatch } from "./api-bus";
+
+declare global {
+  interface Window {
+    MessagingAI?: {
+      open(): void;
+      close(): void;
+      toggle(): void;
+      identify(user: { name?: string; email?: string; phone?: string }): void;
+      destroy(): void;
+    };
+  }
+}
+
+let host: HTMLElement | null = null;
 
 function tokensToCssVars(): string {
   const map: Record<string, string> = {
@@ -43,18 +70,33 @@ function tokensToCssVars(): string {
   return ":host {\n" + Object.entries(map).map(([k, v]) => `  ${k}: ${v};`).join("\n") + "\n}";
 }
 
-// Scaffold pill — replaced by the full Widget tree in commit 3. Now uses
-// the .launcher class so the styles + tokens path is exercised end-to-end.
-function Scaffold() {
-  return h(
-    "button",
-    { class: "launcher", type: "button" },
-    h("span", { class: "label" }, "messaging-ai · scaffold"),
-  );
+type EmbedConfig = {
+  widgetKey: string | null;
+  /** Display name shown in the panel header until the server confirms it. */
+  tenantName: string;
+};
+
+function readEmbedConfig(): EmbedConfig {
+  // document.currentScript is null when the bundle is loaded via type=module
+  // dev-server transform; in that case fall back to data-* on any <script>
+  // matching our src or any element with [data-messaging-ai-key].
+  const fromCurrent =
+    typeof document !== "undefined"
+      ? (document.currentScript as HTMLScriptElement | null)
+      : null;
+  let scriptEl: HTMLScriptElement | null = fromCurrent;
+  if (!scriptEl && typeof document !== "undefined") {
+    scriptEl = document.querySelector<HTMLScriptElement>("script[data-key]");
+  }
+  return {
+    widgetKey: scriptEl?.dataset.key ?? null,
+    tenantName: scriptEl?.dataset.name ?? "Support",
+  };
 }
 
 function mount(): void {
-  const host = document.createElement("div");
+  if (host) return; // idempotent — never mount twice
+  host = document.createElement("div");
   host.id = "messaging-ai-widget-host";
   host.style.cssText = "all: initial; position: relative; z-index: 2147483000;";
   document.body.appendChild(host);
@@ -67,11 +109,36 @@ function mount(): void {
   const root = document.createElement("div");
   shadow.appendChild(root);
 
-  render(h(Scaffold, null), root);
+  const config = readEmbedConfig();
+  render(
+    h(Widget, { widgetKey: config.widgetKey, tenantName: config.tenantName }),
+    root,
+  );
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", mount);
-} else {
-  mount();
+function destroy(): void {
+  if (host) {
+    host.remove();
+    host = null;
+  }
+}
+
+const api: NonNullable<Window["MessagingAI"]> = {
+  open: () => busDispatch({ type: "open" }),
+  close: () => busDispatch({ type: "close" }),
+  toggle: () => busDispatch({ type: "toggle" }),
+  identify: (user) => busDispatch({ type: "identify", user }),
+  destroy,
+};
+
+if (typeof window !== "undefined") {
+  window.MessagingAI = api;
+}
+
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mount);
+  } else {
+    mount();
+  }
 }

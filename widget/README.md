@@ -3,15 +3,30 @@
 Standalone embeddable chat widget for messaging-ai. Single-script embed,
 Shadow-DOM-isolated, Preact + Vite library build.
 
-## Embed (planned, post-integration)
+## Embed
 
 ```html
 <script
   src="https://app.messaging-ai.com/widget/v1/widget.js"
-  data-tenant="acme"
-  data-position="bottom-right"
+  data-key="wgt_pk_..."
   async
 ></script>
+```
+
+`data-key` is the widget's public key. The server resolves it to a tenant via `Channel.config` when the widget channel is enabled in the dashboard (UI for issuing keys lands at integration). Public keys are safe to expose in HTML — they only authorize incoming customer messages on a specific tenant's behalf.
+
+Optional attributes:
+
+- `data-name="Acme support"` — display name shown in the panel header until the server returns the canonical one. Defaults to `"Support"`.
+
+The widget mounts itself once per page; calling the embed twice is a no-op. To control it programmatically:
+
+```js
+window.MessagingAI.open();
+window.MessagingAI.close();
+window.MessagingAI.toggle();
+window.MessagingAI.identify({ name, email, phone });
+window.MessagingAI.destroy();
 ```
 
 ## Develop
