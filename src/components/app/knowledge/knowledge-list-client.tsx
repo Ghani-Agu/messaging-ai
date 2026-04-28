@@ -69,7 +69,7 @@ function StatusPill({ status }: { status: Status }) {
 function relTime(d: Date | string | null): string {
   if (!d) return "—";
   const date = typeof d === "string" ? new Date(d) : d;
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function isInProgress(s: SourceSummary): boolean {

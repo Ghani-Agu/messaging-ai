@@ -125,7 +125,7 @@ export function SourceDetailClient({
             <p className="mt-1 text-body-sm text-[var(--text-secondary)]">
               {chunks.length} chunks ·{" "}
               {source.lastIngestedAt
-                ? new Date(source.lastIngestedAt).toLocaleString()
+                ? new Date(source.lastIngestedAt).toLocaleString("en-US")
                 : "not yet ingested"}
             </p>
             {source.sourceUrl && source.type === "WEBSITE" ? (
@@ -237,7 +237,7 @@ export function SourceDetailClient({
                   )}
                 >
                   <span className="mr-2 text-[var(--text-tertiary)]">
-                    {new Date(l.ts).toLocaleTimeString()}
+                    {new Date(l.ts).toLocaleTimeString("en-US")}
                   </span>
                   {l.text}
                 </li>
