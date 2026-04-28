@@ -5,20 +5,119 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>messaging-ai widget — dev shell</title>
     <style>
+      :root {
+        color-scheme: light;
+      }
       body {
         margin: 0;
-        padding: 48px;
+        padding: 56px 32px 200px;
         font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-        background: #fafafa;
+        background: linear-gradient(180deg, #fafafa 0%, #f0f0f3 100%);
         color: #1a1a1a;
+        max-width: 720px;
+        margin-inline: auto;
       }
-      h1 { font-size: 22px; margin: 0 0 8px; }
-      p  { color: #555; max-width: 60ch; }
+      h1 {
+        font-size: 24px;
+        margin: 0 0 4px;
+        letter-spacing: -0.01em;
+      }
+      .subtitle {
+        color: #666;
+        font-size: 14px;
+        margin: 0 0 32px;
+      }
+      h2 {
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #888;
+        margin: 32px 0 8px;
+      }
+      ol, ul {
+        line-height: 1.75;
+        margin: 0 0 16px;
+        padding-inline-start: 24px;
+      }
+      li {
+        margin-bottom: 4px;
+      }
+      code {
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 13px;
+        background: #ececec;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+      .embed {
+        background: #1a1a1a;
+        color: #f5f5f5;
+        padding: 16px 18px;
+        border-radius: 8px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        overflow-x: auto;
+      }
+      .embed .attr  { color: #ffd180; }
+      .embed .value { color: #80cbc4; }
+      .arrow {
+        display: inline-block;
+        color: #7C3AED;
+      }
     </style>
   </head>
   <body>
     <h1>messaging-ai widget — dev shell</h1>
-    <p>The widget mounts itself in a Shadow DOM root attached to <code>&lt;body&gt;</code>. Look for the launcher in the bottom-right corner. Full host-page simulation arrives at the demo gate.</p>
-    <script type="module" src="/src/main.ts"></script>
+    <p class="subtitle">
+      This page simulates a customer-site host. The widget mounts itself in a
+      Shadow DOM and shows a launcher in the bottom-right corner. <strong>The
+      <code>data-key</code> on the script tag is the public widget key the
+      server resolves to a tenant.</strong>
+    </p>
+
+    <h2>Embed snippet (preview)</h2>
+    <div class="embed">
+&lt;script
+  src="<span class="value">https://app.messaging-ai.com/widget/v1/widget.js</span>"
+  <span class="attr">data-key</span>="<span class="value">wgt_pk_demo_acme_test</span>"
+  <span class="attr">data-name</span>="<span class="value">Acme support</span>"
+  async&gt;&lt;/script&gt;
+    </div>
+
+    <h2>Walkthrough — verify all 6 states</h2>
+    <ol>
+      <li><strong>Closed</strong>. <span class="arrow">→</span> Look bottom-right: floating violet "Chat with us" pill.</li>
+      <li><strong>Open + empty</strong>. <span class="arrow">→</span> Click the launcher. Panel opens with header, "Ask anything" empty state, focused composer.</li>
+      <li><strong>Open + history</strong>. <span class="arrow">→</span> In the dev controls bottom-left, click <code>darija RTL</code>. Confirm: customer Darija-Arabizi bubble (LTR), AI Darija-Arabizi reply (LTR), customer Arabic-script bubble (<strong>RTL — tail flips to the right</strong>), AI Arabic-script reply (<strong>RTL</strong>). Tail corner sits on the speaker's side in both directions.</li>
+      <li><strong>Open + sending</strong>. <span class="arrow">→</span> Type any message, press <kbd>Enter</kbd>. The user bubble appears; three bouncing dots replace the cursor while the mock thinks (~450ms).</li>
+      <li><strong>Open + streaming</strong>. <span class="arrow">→</span> Reply text accumulates ~8 chars at a time; breathing cursor at the end of the AI bubble until done. Try <code>Je veux un remboursement</code> (PAYMENT_DISPUTE), <code>nhder m3a wa7ed agent</code> (EXPLICIT_REQUEST), <code>?????</code> (OUTSIDE_SCOPE).</li>
+      <li><strong>Open + error</strong>. <span class="arrow">→</span> Click <code>error</code> in the dev controls. Top-of-panel red banner appears; composer disabled. Click <code>clear</code> to reset.</li>
+    </ol>
+
+    <h2>RTL composer check</h2>
+    <p>
+      Type <code>واش عندكم</code> directly into the composer. The textarea
+      <code>dir</code> should flip to <code>rtl</code> at the first
+      Arabic-script character. Erase back to empty; <code>dir</code> reverts
+      to <code>ltr</code>.
+    </p>
+
+    <h2>Reduced motion</h2>
+    <p>
+      System Settings <span class="arrow">→</span> Accessibility <span class="arrow">→</span> Reduce motion. Reload. The panel slide-in, bubble fade-in, dot bounce, and cursor breath all stop animating. Other interactions still work.
+    </p>
+
+    <h2>Console</h2>
+    <p>
+      The widget exposes <code>window.MessagingAI</code> with
+      <code>open()</code>, <code>close()</code>, <code>toggle()</code>,
+      <code>identify({ name, email })</code>, and <code>destroy()</code>. Try
+      <code>MessagingAI.toggle()</code> in the devtools console.
+    </p>
+
+    <!-- Embed simulator. data-key surfaces in main.ts via document.querySelector
+         when document.currentScript isn't available (Vite dev module load). -->
+    <script type="module" src="/src/main.ts" data-key="wgt_pk_demo_acme_test" data-name="Acme support"></script>
   </body>
 </html>

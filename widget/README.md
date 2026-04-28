@@ -34,10 +34,12 @@ window.MessagingAI.destroy();
 This package is a workspace under the root `messaging-ai` repo. From the repo root:
 
 ```bash
-npm install                # installs root + widget deps
+npm install                # installs root + widget deps; pre-commit hook activates via `prepare`
 npm run widget:dev         # vite dev server with the dev shell at /
 npm run widget:build       # production build + bundle-size guard
 ```
+
+The dev shell at `widget/index.html` simulates a customer-site host page and includes a guided walkthrough for the six widget states (closed / empty / history / sending / streaming / error) plus the RTL composer flip and the reduced-motion fallback. The dev-only **DemoControls** strip in the bottom-left cycles through the four canned brain shapes (`happy` / `outside-scope` / `explicit-request` / `payment-dispute`) and the seeded Darija RTL history.
 
 Or from inside `widget/`:
 
