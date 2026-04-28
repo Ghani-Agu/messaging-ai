@@ -361,3 +361,85 @@ export async function listUnembeddedChunksByIds(args: {
        AND "embedding" IS NULL
   `;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Retrieval (Phase 3, step 8)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import type { SourceType as _SourceType } from "@prisma/client";
+import { HNSW_EF_SEARCH } from "@/server/knowledge/limits";
+
+export type RawSearchHit = {
+  chunkId: string;
+  sourceId: string;
+  sourceName: string;
+  sourceType: _SourceType;
+  content: string;
+  metadata: Prisma.JsonValue;
+  score: number;
+};
+
+/**
+ * Cosine-similarity vector search, scoped to one tenant. Wrapped in a
+ * transaction so we can `SET LOCAL hnsw.ef_search` first — the default
+ * ef_search of 40 returns too few candidates after the tenantId filter
+ * to fill top-K reliably (per blocking revision #6).
+ *
+ * The query vector is encoded as a pgvector literal (`[a,b,c]`) and
+ * cast server-side. tenantId is parameterized via Prisma.sql, never
+ * string-concatenated (per project lead's nit).
+ */
+export async function vectorSearch(args: {
+  tenantId: string;
+  queryVector: number[];
+  limit: number;
+}): Promise<RawSearchHit[]> {
+  const literal = "[" + args.queryVector.join(",") + "]";
+  return prisma.$transaction(async (tx) => {
+    // SET parameters can't be bound, only literals; the value here is a
+    // constant from limits.ts, never user-supplied.
+    await tx.$executeRawUnsafe(`SET LOCAL hnsw.ef_search = ${HNSW_EF_SEARCH}`);
+    return tx.$queryRaw<RawSearchHit[]>`
+      SELECT k."id"        AS "chunkId",
+             k."sourceId"  AS "sourceId",
+             s."name"      AS "sourceName",
+             s."type"      AS "sourceType",
+             k."content"   AS "content",
+             k."metadata"  AS "metadata",
+             1 - (k."embedding" <=> ${literal}::vector) AS "score"
+        FROM "KnowledgeChunk" k
+        JOIN "KnowledgeSource" s ON s."id" = k."sourceId"
+       WHERE k."tenantId" = ${args.tenantId}
+         AND k."embedding" IS NOT NULL
+       ORDER BY k."embedding" <=> ${literal}::vector ASC
+       LIMIT ${args.limit}
+    `;
+  });
+}
+
+/**
+ * Lexical (full-text) search via plainto_tsquery on the `simple`
+ * configuration — same one as the GENERATED searchVector column. Free-form
+ * user queries are accepted as-is; plainto_tsquery handles operator escaping.
+ */
+export async function lexicalSearch(args: {
+  tenantId: string;
+  query: string;
+  limit: number;
+}): Promise<RawSearchHit[]> {
+  return prisma.$queryRaw<RawSearchHit[]>`
+    SELECT k."id"        AS "chunkId",
+           k."sourceId"  AS "sourceId",
+           s."name"      AS "sourceName",
+           s."type"      AS "sourceType",
+           k."content"   AS "content",
+           k."metadata"  AS "metadata",
+           ts_rank(k."searchVector", plainto_tsquery('simple', ${args.query})) AS "score"
+      FROM "KnowledgeChunk" k
+      JOIN "KnowledgeSource" s ON s."id" = k."sourceId"
+     WHERE k."tenantId" = ${args.tenantId}
+       AND k."searchVector" @@ plainto_tsquery('simple', ${args.query})
+     ORDER BY "score" DESC
+     LIMIT ${args.limit}
+  `;
+}

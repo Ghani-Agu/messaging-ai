@@ -16,6 +16,10 @@ import {
 } from "@/server/db/knowledge";
 import { embed } from "@/server/ai/embeddings";
 import { chunkPlainText } from "@/server/knowledge/chunker";
+import {
+  retrieve,
+  type RetrievedChunk,
+} from "@/server/knowledge/retriever";
 import { enqueueCrawlWebsite, enqueueParseFile } from "@/server/queue/jobs";
 import {
   createSignedUploadUrl,
@@ -319,6 +323,24 @@ export async function reingestSource(
     tenantId: ctx.tenant.id,
     content: rawContent,
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Retrieval test
+// ─────────────────────────────────────────────────────────────────────────────
+
+const retrievalQuerySchema = z.object({
+  query: z.string().trim().min(1, "Query is required").max(1000, "Query is too long"),
+  topK: z.number().int().min(1).max(20),
+});
+
+export async function runRetrieval(
+  slug: string,
+  input: { query: string; topK: number },
+): Promise<RetrievedChunk[]> {
+  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const { query, topK } = retrievalQuerySchema.parse(input);
+  return retrieve({ tenantId: ctx.tenant.id, query, topK });
 }
 
 export async function deleteSource(
