@@ -50,10 +50,12 @@ export function SourceDetailClient({
   slug,
   source,
   chunks,
+  totalChunks,
 }: {
   slug: string;
   source: KnowledgeSource;
   chunks: KnowledgeChunk[];
+  totalChunks: number;
 }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<"reingest" | "delete" | null>(null);
@@ -123,7 +125,7 @@ export function SourceDetailClient({
               </span>
             </div>
             <p className="mt-1 text-body-sm text-[var(--text-secondary)]">
-              {chunks.length} chunks ·{" "}
+              {totalChunks} chunks ·{" "}
               {source.lastIngestedAt
                 ? new Date(source.lastIngestedAt).toLocaleString("en-US")
                 : "not yet ingested"}
@@ -214,6 +216,11 @@ export function SourceDetailClient({
                   </li>
                 );
               })}
+              {totalChunks > chunks.length ? (
+                <li className="px-5 py-3 text-caption text-[var(--text-tertiary)]">
+                  Showing first {chunks.length} of {totalChunks} chunks
+                </li>
+              ) : null}
             </ul>
           )}
         </Card>

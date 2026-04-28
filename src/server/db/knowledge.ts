@@ -328,6 +328,15 @@ export async function listUnembeddedChunkIdsForSource(sourceId: string): Promise
   return rows.map((r) => r.id);
 }
 
+export async function countChunksForSource(args: {
+  tenantId: string;
+  sourceId: string;
+}): Promise<number> {
+  return prisma.knowledgeChunk.count({
+    where: { sourceId: args.sourceId, tenantId: args.tenantId },
+  });
+}
+
 export async function chunkExistsForSource(sourceId: string): Promise<boolean> {
   const found = await prisma.knowledgeChunk.findFirst({
     where: { sourceId },
