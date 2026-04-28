@@ -170,3 +170,73 @@ export type WidgetChannelConfig = z.infer<typeof widgetChannelConfigSchema>;
 export function parseWidgetChannelConfig(raw: unknown): WidgetChannelConfig {
   return widgetChannelConfigSchema.parse(raw);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WhatsApp channel config (Phase 6a)
+//
+// Lives inside `Channel.config` for rows where Channel.type = 'WHATSAPP'.
+// `phoneNumberId` is the value indexed by Channel_whatsapp_phoneNumberId_unique
+// (the partial unique B-tree on config->>'phoneNumberId') and is the WABA
+// phone-number-id forwarded by 360dialog/Meta on every webhook payload — the
+// webhook handler resolves the receiving Channel via this lookup.
+//
+// `Channel.credentials` is encrypted at rest (src/server/channels/credentials)
+// with the plaintext shape defined by whatsappCredentialsSchema below.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Provider implementation switch. 360dialog ships in Phase 6; Meta Cloud
+ * Direct ("meta-cloud") is intentionally not in the enum yet — adding it
+ * later is a one-line schema change plus a new client implementation.
+ */
+export const whatsappProviderSchema = z.enum(["threesixtydialog"]);
+export type WhatsAppProvider = z.infer<typeof whatsappProviderSchema>;
+
+/**
+ * E.164 phone number — leading "+", country code, 1–14 more digits. Used for
+ * the human-readable phoneNumber field surfaced in the dashboard. The
+ * provider-side lookup key is `phoneNumberId`, not this.
+ */
+const e164Schema = z
+  .string()
+  .trim()
+  .regex(/^\+[1-9]\d{1,14}$/, "Phone number must be E.164 (e.g. +213555123456)");
+
+export const whatsappChannelConfigSchema = z.object({
+  provider: whatsappProviderSchema.default("threesixtydialog"),
+  // The WABA phone-number-id that identifies this channel on inbound
+  // webhooks. 360dialog forwards Meta-shape payloads; the value lands in
+  // entry[].changes[].value.metadata.phone_number_id. Indexed via the
+  // partial unique in 20260428234123_add_whatsapp_routing.
+  phoneNumberId: z.string().trim().min(1).max(64),
+  // Operator-confirmed display name shown in the dashboard. Falls back to
+  // Channel.displayName if absent.
+  displayName: z.string().trim().min(1).max(80).optional(),
+  // The actual E.164 phone number, surfaced in the conversation-detail
+  // header for WhatsApp threads.
+  phoneNumber: e164Schema.optional(),
+});
+export type WhatsAppChannelConfig = z.infer<typeof whatsappChannelConfigSchema>;
+
+export function parseWhatsAppChannelConfig(raw: unknown): WhatsAppChannelConfig {
+  return whatsappChannelConfigSchema.parse(raw);
+}
+
+/**
+ * Plaintext shape of WhatsApp credentials. Never written to the DB in this
+ * shape — always encrypted via encryptCredentials before persisting and
+ * decrypted via decryptCredentials on read.
+ *
+ *   apiToken      — 360dialog API key (sent as `D360-API-KEY` header on
+ *                   every outbound /messages call).
+ *   webhookSecret — HMAC-SHA256 secret for verifying incoming webhook
+ *                   signatures (X-360DIALOG-Signature: sha256=<hex>).
+ *                   In stub mode this is a generated value; the dev-only
+ *                   simulator route signs payloads with the same secret
+ *                   so the validation path is exercised in dev.
+ */
+export const whatsappCredentialsSchema = z.object({
+  apiToken: z.string().trim().min(1).max(512),
+  webhookSecret: z.string().trim().min(16).max(256),
+});
+export type WhatsAppCredentials = z.infer<typeof whatsappCredentialsSchema>;

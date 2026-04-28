@@ -385,6 +385,17 @@ model Message {
   contentType    MessageContentType @default(TEXT)
   mediaUrl       String?
   aiMetadata     Json?
+  // Phase 6: provider's message ID for non-widget channels (360dialog,
+  // Meta Cloud, IG, FB). Two uses:
+  //   1. INBOUND idempotency — webhook retries are common; dedupe by this
+  //      before recordInboundMessage on the inbound path.
+  //   2. OUTBOUND delivery tracking — providers post status updates back
+  //      (delivered / read / failed); the webhook handler resolves the
+  //      target Message row via this column.
+  // Widget messages always have NULL here. The composite index
+  // (tenantId, providerMessageId) is partial-friendly: NULL rows are
+  // skipped by the lookup query, so the index stays small.
+  providerMessageId String?
   createdAt      DateTime           @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
@@ -395,4 +406,6 @@ model Message {
   @@index([conversationId, createdAt])
   @@index([tenantId])
   @@index([senderUserId])
+  // Webhook idempotency + delivery-status routing for non-widget channels.
+  @@index([tenantId, providerMessageId])
 }
