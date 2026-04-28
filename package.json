@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Multi-channel AI messaging SaaS for MENA SMBs (WhatsApp, Instagram, web widget; AR/FR/EN/Darija).",
+  "workspaces": ["widget"],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -23,7 +24,9 @@
     "test:run": "vitest run",
     "worker": "dotenv -e .env.local -- tsx --conditions=react-server scripts/worker.ts",
     "dev:all": "concurrently -k -n web,worker -c magenta,cyan \"npm:dev\" \"npm:worker\"",
-    "queue:ping": "dotenv -e .env.local -- tsx --conditions=react-server scripts/queue-ping.ts"
+    "queue:ping": "dotenv -e .env.local -- tsx --conditions=react-server scripts/queue-ping.ts",
+    "widget:dev": "npm --workspace @messaging-ai/widget run dev",
+    "widget:build": "npm --workspace @messaging-ai/widget run build"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
