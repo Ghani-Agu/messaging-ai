@@ -20,6 +20,11 @@ const config = [
       "dist/**",
       "src/generated/**",
       "next-env.d.ts",
+      // The Preact widget workspace has its own toolchain (vite + preact JSX
+      // import source). Linting it from the root config flags Preact-isms
+      // (`class` instead of `className`, the unused `h` import, etc.) that
+      // are valid there. Lint scoped from inside widget/ instead.
+      "widget/**",
     ],
   },
   {

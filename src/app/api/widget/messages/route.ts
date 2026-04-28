@@ -13,7 +13,7 @@ import {
   resolveOrCreateConversation,
   type MessageAiMetadata,
 } from "@/server/db/conversations";
-import { runBrainStream } from "@/server/ai/orchestrator";
+import { runBrainStream, type BrainResult } from "@/server/ai/orchestrator";
 
 /**
  * POST /api/widget/messages — single ingress for widget messages.
@@ -153,7 +153,7 @@ export async function POST(req: Request): Promise<Response> {
           limit: 8,
         });
 
-        let lastResult: import("@/server/ai/orchestrator").BrainResult | null = null;
+        let lastResult: BrainResult | null = null;
         for await (const event of runBrainStream({
           tenantId,
           message: userMessage,

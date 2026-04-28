@@ -96,15 +96,30 @@ export function getChannelByWidgetPublicKey(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Default displayName used on first create when the caller doesn't provide
+ * one (the "enable" path — mints the row but doesn't yet collect surface
+ * fields). Visible in the dashboard until an operator overrides it via
+ * updateWidgetConfig.
+ */
+const WIDGET_DEFAULT_DISPLAY_NAME = "Website chat";
+
+/**
  * Idempotent create-or-update of the tenant's WIDGET channel. On first
  * call mints a fresh publicKey via mintWidgetPublicKey(). On subsequent
  * calls the existing publicKey is preserved — only the surface fields
- * (displayName, themeAccent, originsAllowlist) are patched. To rotate
- * the key, call rotateWidgetChannelKey() instead.
+ * (displayName, themeAccent, originsAllowlist) explicitly passed are
+ * patched; omitted fields keep their current value. To rotate the key,
+ * call rotateWidgetChannelKey() instead.
+ *
+ * All surface fields are optional. Calling with just `{ tenantId }` is
+ * the "enable" path: creates the row with defaults if missing, no-op if
+ * present. Calling with surface fields is the "update" path; consumers
+ * that require an existing row (updateWidgetConfig) check getWidgetChannel
+ * themselves before delegating here.
  */
 export async function upsertWidgetChannel(args: {
   tenantId: string;
-  displayName: string;
+  displayName?: string;
   themeAccent?: string;
   originsAllowlist?: string[];
 }): Promise<Channel> {
@@ -114,21 +129,22 @@ export async function upsertWidgetChannel(args: {
     const current = parseWidgetChannelConfig(existing.config);
     const nextConfig: WidgetChannelConfig = {
       publicKey: current.publicKey,
-      displayName,
+      displayName: displayName ?? current.displayName,
       themeAccent: themeAccent ?? current.themeAccent,
       originsAllowlist: originsAllowlist ?? current.originsAllowlist,
     };
     return prisma.channel.update({
       where: { id: existing.id },
       data: {
-        displayName,
+        ...(displayName !== undefined ? { displayName } : {}),
         config: nextConfig as unknown as Prisma.InputJsonValue,
       },
     });
   }
+  const resolvedDisplayName = displayName ?? WIDGET_DEFAULT_DISPLAY_NAME;
   const newConfig: WidgetChannelConfig = {
     publicKey: mintWidgetPublicKey(),
-    displayName,
+    displayName: resolvedDisplayName,
     themeAccent,
     originsAllowlist: originsAllowlist ?? [],
   };
@@ -136,7 +152,7 @@ export async function upsertWidgetChannel(args: {
     data: {
       tenantId,
       type: "WIDGET",
-      displayName,
+      displayName: resolvedDisplayName,
       status: "CONNECTED",
       config: newConfig as unknown as Prisma.InputJsonValue,
     },

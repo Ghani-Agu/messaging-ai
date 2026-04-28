@@ -2,6 +2,10 @@
  * Seeds a WIDGET Channel for a given tenant slug. Idempotent — re-running
  * preserves the existing publicKey via upsertWidgetChannel.
  *
+ * TODO(post-6e): seed demo KnowledgeSource rows for `acme-test` so widget
+ * playground replies don't always escalate. Path: src/server/knowledge/
+ * actions.ts → createWebsiteSource (Phase 3 ingestion flow).
+ *
  * Run:
  *   npx dotenv -e .env.local -- tsx scripts/seed-widget-channel.ts <tenantSlug>
  *

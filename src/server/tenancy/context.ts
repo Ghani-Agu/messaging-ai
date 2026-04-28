@@ -33,7 +33,13 @@ export type TenantContext = {
   };
 };
 
-const ROLE_RANK: Record<Role, number> = {
+/**
+ * Single source of truth for role precedence. Higher rank ⇒ broader
+ * authority. Pages and components that gate UI affordances import this
+ * directly so they never drift from `requireTenantContext`'s server-side
+ * check.
+ */
+export const ROLE_RANK: Record<Role, number> = {
   OWNER: 4,
   ADMIN: 3,
   AGENT: 2,
