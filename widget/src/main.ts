@@ -1,29 +1,55 @@
 /**
- * Widget entry point. This file's only Phase-5 commit-1 job is to prove the
- * Vite library build, IIFE output, and Shadow DOM mount work end-to-end so
- * the bundle-size check has something to measure. Real component tree
- * lands in commit 3.
+ * Widget entry point — commit-2 state.
+ *
+ * Wires the generated tokens (widget/src/tokens.ts) as Shadow-DOM-scoped
+ * CSS custom properties and injects the scoped stylesheet (styles.css)
+ * inline. The full embed contract — reading data-key from the host
+ * <script>, exposing window.MessagingAI, subscribing to the bus — lands
+ * in commit 3 alongside the component tree.
  */
 import { h, render } from "preact";
+import { tokens } from "./tokens";
+import styles from "./styles.css?inline";
 
+function tokensToCssVars(): string {
+  const map: Record<string, string> = {
+    "--ma-bg-base": tokens.bg.base,
+    "--ma-bg-surface": tokens.bg.surface,
+    "--ma-bg-surface-elevated": tokens.bg.surfaceElevated,
+    "--ma-bg-surface-overlay": tokens.bg.surfaceOverlay,
+    "--ma-border-subtle": tokens.border.subtle,
+    "--ma-border-default": tokens.border.default,
+    "--ma-text-primary": tokens.text.primary,
+    "--ma-text-secondary": tokens.text.secondary,
+    "--ma-text-tertiary": tokens.text.tertiary,
+    "--ma-text-disabled": tokens.text.disabled,
+    "--ma-accent-base": tokens.accent.base,
+    "--ma-accent-hover": tokens.accent.hover,
+    "--ma-danger": tokens.status.danger,
+    "--ma-radius-sm": tokens.radius.sm,
+    "--ma-radius-md": tokens.radius.md,
+    "--ma-radius-lg": tokens.radius.lg,
+    "--ma-radius-xl": tokens.radius.xl,
+    "--ma-radius-full": tokens.radius.full,
+    "--ma-shadow-md": tokens.shadow.md,
+    "--ma-shadow-lg": tokens.shadow.lg,
+    "--ma-shadow-glow": tokens.shadow.glow,
+    "--ma-ease-standard": tokens.motion.easeStandard,
+    "--ma-ease-out-expo": tokens.motion.easeOutExpo,
+    "--ma-duration-fast": tokens.motion.durationFast,
+    "--ma-duration-medium": tokens.motion.durationMedium,
+    "--ma-duration-slow": tokens.motion.durationSlow,
+  };
+  return ":host {\n" + Object.entries(map).map(([k, v]) => `  ${k}: ${v};`).join("\n") + "\n}";
+}
+
+// Scaffold pill — replaced by the full Widget tree in commit 3. Now uses
+// the .launcher class so the styles + tokens path is exercised end-to-end.
 function Scaffold() {
   return h(
-    "div",
-    {
-      style: {
-        position: "fixed",
-        right: "16px",
-        bottom: "16px",
-        padding: "10px 14px",
-        background: "#7C3AED",
-        color: "white",
-        borderRadius: "9999px",
-        font:
-          "500 13px/1 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-        boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
-      },
-    },
-    "messaging-ai · scaffold",
+    "button",
+    { class: "launcher", type: "button" },
+    h("span", { class: "label" }, "messaging-ai · scaffold"),
   );
 }
 
@@ -34,6 +60,10 @@ function mount(): void {
   document.body.appendChild(host);
 
   const shadow = host.attachShadow({ mode: "open" });
+  const styleEl = document.createElement("style");
+  styleEl.textContent = tokensToCssVars() + "\n" + styles;
+  shadow.appendChild(styleEl);
+
   const root = document.createElement("div");
   shadow.appendChild(root);
 

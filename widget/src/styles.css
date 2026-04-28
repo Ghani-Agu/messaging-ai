@@ -1,0 +1,296 @@
+/*
+ * Widget styles. Scoped to the Shadow DOM root via :host — host-page CSS
+ * cannot reach inside, nothing in here leaks out. All values pull from CSS
+ * custom properties injected by main.ts from tokens.ts (the auto-generated
+ * mirror of src/lib/design-tokens.ts).
+ */
+
+:host {
+  font-family: "Geist Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ma-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+
+/* ── Launcher — closed-state floating button ─────────────────────────── */
+
+.launcher {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  background: var(--ma-accent-base);
+  color: white;
+  border: none;
+  border-radius: var(--ma-radius-full);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--ma-shadow-md), var(--ma-shadow-glow);
+  transition:
+    transform var(--ma-duration-fast) var(--ma-ease-standard),
+    box-shadow var(--ma-duration-fast) var(--ma-ease-standard);
+}
+.launcher:hover  { transform: translateY(-2px); }
+.launcher:active { transform: translateY(0); }
+.launcher .label { font-size: 14px; }
+
+@media (max-width: 480px) {
+  .launcher .label { display: none; }
+}
+
+/* ── Panel — open chat surface ───────────────────────────────────────── */
+
+.panel {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 380px;
+  height: min(640px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  background: var(--ma-bg-surface);
+  border: 1px solid var(--ma-border-subtle);
+  border-radius: var(--ma-radius-xl);
+  box-shadow: var(--ma-shadow-lg);
+  overflow: hidden;
+  animation: panel-in var(--ma-duration-medium) var(--ma-ease-out-expo);
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+
+@media (max-width: 480px) {
+  .panel {
+    right: 0;
+    bottom: 0;
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ma-border-subtle);
+}
+.header-title    { font-weight: 600; font-size: 14px; }
+.header-subtitle { font-size: 12px; color: var(--ma-text-tertiary); margin-top: 2px; }
+
+.error-banner {
+  padding: 8px 16px;
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--ma-danger);
+  font-size: 13px;
+  border-bottom: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* ── Message list + bubbles ──────────────────────────────────────────── */
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bubble {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: var(--ma-radius-lg);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  animation: bubble-in 200ms var(--ma-ease-out-expo);
+}
+
+@keyframes bubble-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.bubble.customer {
+  align-self: flex-end;
+  background: var(--ma-accent-base);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+.bubble.ai {
+  align-self: flex-start;
+  background: var(--ma-bg-surface-elevated);
+  color: var(--ma-text-primary);
+  border: 1px solid var(--ma-border-subtle);
+  border-bottom-left-radius: 4px;
+}
+/* RTL — flip the tail corner so it sits on the speaker's side */
+.bubble.ai[dir="rtl"]       { border-bottom-left-radius: var(--ma-radius-lg); border-bottom-right-radius: 4px; }
+.bubble.customer[dir="rtl"] { border-bottom-right-radius: var(--ma-radius-lg); border-bottom-left-radius: 4px; }
+
+/* ── Streaming + typing affordances ──────────────────────────────────── */
+
+.typing-dots {
+  display: inline-flex;
+  gap: 4px;
+  padding: 12px 14px;
+  align-self: flex-start;
+}
+.typing-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ma-text-tertiary);
+  animation: dot-bounce 1.2s infinite;
+}
+.typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes dot-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30%           { transform: translateY(-4px); opacity: 1; }
+}
+
+.cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: currentColor;
+  margin-left: 1px;
+  vertical-align: -2px;
+  animation: cursor-breath 900ms infinite var(--ma-ease-standard);
+}
+@keyframes cursor-breath {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1; }
+}
+
+/* ── Citations ───────────────────────────────────────────────────────── */
+
+.citations {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.citation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--ma-bg-surface-overlay);
+  border: 1px solid var(--ma-border-default);
+  border-radius: var(--ma-radius-full);
+  font-size: 11px;
+  color: var(--ma-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  transition: background var(--ma-duration-fast) var(--ma-ease-standard);
+}
+.citation-chip:hover { background: var(--ma-border-default); }
+.citation-source {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--ma-bg-base);
+  border: 1px solid var(--ma-border-subtle);
+  border-radius: var(--ma-radius-md);
+  font-size: 12px;
+  color: var(--ma-text-secondary);
+  width: 100%;
+}
+.citation-source a        { color: var(--ma-accent-hover); text-decoration: none; }
+.citation-source a:hover  { text-decoration: underline; }
+
+/* ── Composer ────────────────────────────────────────────────────────── */
+
+.composer {
+  display: flex;
+  gap: 8px;
+  padding: 12px 12px 14px;
+  border-top: 1px solid var(--ma-border-subtle);
+  background: var(--ma-bg-surface);
+}
+.composer textarea {
+  flex: 1;
+  resize: none;
+  min-height: 38px;
+  max-height: 120px;
+  padding: 9px 12px;
+  background: var(--ma-bg-surface-elevated);
+  border: 1px solid var(--ma-border-default);
+  border-radius: var(--ma-radius-md);
+  color: var(--ma-text-primary);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color var(--ma-duration-fast) var(--ma-ease-standard);
+}
+.composer textarea:focus { border-color: var(--ma-accent-base); }
+.composer textarea::placeholder { color: var(--ma-text-tertiary); }
+
+.send-btn {
+  padding: 0 14px;
+  background: var(--ma-accent-base);
+  color: white;
+  border: none;
+  border-radius: var(--ma-radius-md);
+  cursor: pointer;
+  font: inherit;
+  transition: background var(--ma-duration-fast) var(--ma-ease-standard);
+}
+.send-btn:hover    { background: var(--ma-accent-hover); }
+.send-btn:disabled {
+  background: var(--ma-bg-surface-elevated);
+  color: var(--ma-text-disabled);
+  cursor: not-allowed;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: var(--ma-text-tertiary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--ma-radius-sm);
+  font-size: 18px;
+  line-height: 1;
+  transition:
+    color var(--ma-duration-fast) var(--ma-ease-standard),
+    background var(--ma-duration-fast) var(--ma-ease-standard);
+}
+.close-btn:hover {
+  color: var(--ma-text-primary);
+  background: var(--ma-bg-surface-elevated);
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────── */
+
+.empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--ma-text-tertiary);
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+
+/* ── Reduced motion (revision #6) ────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .panel, .bubble, .typing-dots span, .cursor, .launcher, .send-btn, .citation-chip, .close-btn {
+    animation: none !important;
+    transition: none !important;
+  }
+}

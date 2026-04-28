@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "Multi-channel AI messaging SaaS for MENA SMBs (WhatsApp, Instagram, web widget; AR/FR/EN/Darija).",
-  "workspaces": ["widget"],
+  "workspaces": [
+    "widget"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -26,7 +28,13 @@
     "dev:all": "concurrently -k -n web,worker -c magenta,cyan \"npm:dev\" \"npm:worker\"",
     "queue:ping": "dotenv -e .env.local -- tsx --conditions=react-server scripts/queue-ping.ts",
     "widget:dev": "npm --workspace @messaging-ai/widget run dev",
-    "widget:build": "npm --workspace @messaging-ai/widget run build"
+    "widget:build": "npm run widget:check-tokens && npm --workspace @messaging-ai/widget run build",
+    "widget:tokens": "tsx scripts/generate-widget-tokens.ts",
+    "widget:check-tokens": "tsx scripts/generate-widget-tokens.ts --check",
+    "prepare": "simple-git-hooks"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "npm run widget:check-tokens"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
@@ -70,6 +78,7 @@
     "prettier": "^3.4.0",
     "prettier-plugin-tailwindcss": "^0.6.9",
     "prisma": "^6.1.0",
+    "simple-git-hooks": "^2.13.1",
     "tailwindcss": "^4.1.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
