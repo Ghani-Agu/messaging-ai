@@ -85,3 +85,38 @@ export function getVoiceProfile(settings: unknown): VoiceProfile {
   if (!parsed.data.voiceProfile) return defaultVoiceProfile();
   return parsed.data.voiceProfile;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Widget channel config (Phase 6)
+//
+// Lives inside `Channel.config` for rows where Channel.type = 'WIDGET'.
+// `publicKey` is the value indexed by Channel_widget_publicKey_unique (the
+// partial unique B-tree on config->>'publicKey'); the embed snippet on the
+// host page passes it via `data-key`. Format: "wgt_pk_" + 32 lowercase hex
+// chars (16 random bytes), matching the regex consumed in widget/.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const WIDGET_PUBLIC_KEY_REGEX = /^wgt_pk_[a-z0-9]{32}$/;
+
+export const widgetChannelConfigSchema = z.object({
+  publicKey: z.string().regex(WIDGET_PUBLIC_KEY_REGEX, "expected wgt_pk_ + 32 hex chars"),
+  // Server-confirmed business name. When set, overrides the embed's data-name
+  // attribute on the first stream response — see channels.ts doc comment.
+  displayName: z.string().trim().min(1).max(80).optional(),
+  // CSS color string (hex / hsl / oklch). Tenant-side override of the
+  // widget's accent. Validated more strictly when the channels-page UI lands.
+  themeAccent: z.string().trim().min(1).max(64).optional(),
+  // Origins permitted to embed the widget. Each entry is a serialized origin
+  // ("https://example.com"); empty array means "no restriction" in v1 (Phase 9
+  // billing tiers will add enforcement).
+  originsAllowlist: z.array(z.string().trim().min(1).max(255)).max(20).default([]),
+});
+export type WidgetChannelConfig = z.infer<typeof widgetChannelConfigSchema>;
+
+/**
+ * Parse a Channel.config JSON value into the widget shape. Throws on shape
+ * mismatch — callers that need a tolerant read use `safeParse` directly.
+ */
+export function parseWidgetChannelConfig(raw: unknown): WidgetChannelConfig {
+  return widgetChannelConfigSchema.parse(raw);
+}
