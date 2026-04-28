@@ -1,5 +1,6 @@
 import "server-only";
-import { Worker, type Job } from "bullmq";
+import { UnrecoverableError, Worker, type Job } from "bullmq";
+import { setTimeout as sleep } from "node:timers/promises";
 import { createRedisConnection } from "../connection";
 import {
   INGEST_QUEUE_NAME,
@@ -9,6 +10,24 @@ import {
   type ParseFileJobData,
   type PingJobData,
 } from "../queues";
+import { enqueueEmbedBatches } from "../jobs";
+import {
+  appendSourceLog,
+  chunkExistsForSource,
+  countTenantChunks,
+  flagSoftCapReached,
+  insertChunksWithoutEmbeddings,
+  listUnembeddedChunkIdsForSource,
+  maybeMarkSourceReady,
+  updateSourceStatus,
+} from "@/server/db/knowledge";
+import { chunkMarkdown } from "@/server/knowledge/chunker";
+import {
+  fetchCrawlPages,
+  getCrawlStatus,
+  startCrawl,
+} from "@/server/knowledge/crawler";
+import { MAX_CHUNKS_PER_TENANT } from "@/server/knowledge/limits";
 
 /**
  * Worker for the `ingest` queue. Routes by job.name and only runs one job
@@ -37,7 +56,6 @@ export function startIngestWorker(): Worker<IngestJobData, unknown, IngestJobNam
             job as Job<ParseFileJobData, unknown, "parse-file">,
           );
         default: {
-          // Exhaustiveness: any new IngestJobName must add a case above.
           const exhaustive: never = job.name;
           throw new Error(`unhandled ingest job name: ${String(exhaustive)}`);
         }
@@ -60,16 +78,25 @@ export function startIngestWorker(): Worker<IngestJobData, unknown, IngestJobNam
   return worker;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Handlers
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function handlePing(job: Job<PingJobData, unknown, "ping">): Promise<{ pong: string; ts: number }> {
   console.log(`[ingest] ping nonce=${job.data.nonce}`);
   return { pong: job.data.nonce, ts: Date.now() };
 }
 
 async function handleCrawlWebsite(
-  _job: Job<CrawlWebsiteJobData, unknown, "crawl-website">,
-): Promise<unknown> {
-  // Wired up in step 5.
-  throw new Error("crawl-website handler not implemented yet (Phase 3, step 5)");
+  job: Job<CrawlWebsiteJobData, unknown, "crawl-website">,
+): Promise<{ chunkCount: number }> {
+  const { sourceId, tenantId, rootUrl } = job.data;
+  try {
+    return await runCrawlWebsite({ sourceId, tenantId, rootUrl });
+  } catch (err) {
+    await reportFailure(job, sourceId, err);
+    throw err;
+  }
 }
 
 async function handleParseFile(
@@ -77,4 +104,148 @@ async function handleParseFile(
 ): Promise<unknown> {
   // Wired up in step 6.
   throw new Error("parse-file handler not implemented yet (Phase 3, step 6)");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// runCrawlWebsite — the actual pipeline
+// ─────────────────────────────────────────────────────────────────────────────
+
+const POLL_INTERVAL_MS = 5_000;
+const POLL_TIMEOUT_MS = 7 * 60 * 1000; // < lockDuration (10 min) by 3 min slack
+
+async function runCrawlWebsite(args: {
+  sourceId: string;
+  tenantId: string;
+  rootUrl: string;
+}): Promise<{ chunkCount: number }> {
+  const { sourceId, tenantId, rootUrl } = args;
+  await updateSourceStatus({ sourceId, status: "PROCESSING", error: null });
+
+  // Idempotency (blocking revision #1): if chunk rows already exist for
+  // this source, this is a retry after a crash mid-pipeline. Skip the
+  // re-crawl and re-insert — only enqueue embeds for the remainder.
+  if (await chunkExistsForSource(sourceId)) {
+    const unembedded = await listUnembeddedChunkIdsForSource(sourceId);
+    await appendSourceLog({
+      sourceId,
+      level: "info",
+      text: `Resuming: ${unembedded.length} chunks awaiting embeddings`,
+    });
+    if (unembedded.length === 0) {
+      await maybeMarkSourceReady(sourceId);
+      return { chunkCount: 0 };
+    }
+    await enqueueEmbedBatches({ sourceId, tenantId, chunkIds: unembedded });
+    return { chunkCount: 0 };
+  }
+
+  await appendSourceLog({ sourceId, level: "info", text: `Crawling ${rootUrl}` });
+  const { jobId: firecrawlId } = await startCrawl({ url: rootUrl });
+
+  // Poll loop with progress updates.
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  for (;;) {
+    if (Date.now() > deadline) {
+      throw new Error("Firecrawl polling timed out after 7 minutes");
+    }
+    const status = await getCrawlStatus(firecrawlId);
+    await updateSourceStatus({
+      sourceId,
+      progress: {
+        pagesCrawled: status.pagesCrawled,
+        totalPages: status.totalPages,
+      },
+    });
+    if (status.state === "completed") break;
+    if (status.state === "failed") {
+      throw new UnrecoverableError(
+        status.error ?? "Firecrawl reported failure",
+      );
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  const pages = await fetchCrawlPages(firecrawlId);
+  if (pages.length === 0) {
+    throw new UnrecoverableError(
+      "Firecrawl returned 0 pages — verify the URL is publicly reachable",
+    );
+  }
+  await appendSourceLog({
+    sourceId,
+    level: "info",
+    text: `Crawled ${pages.length} pages — chunking`,
+  });
+
+  const chunks = pages.flatMap((page) =>
+    chunkMarkdown({
+      content: page.markdown,
+      sourceUrl: page.url,
+      initialHeadingPath: page.title ? [page.title] : [],
+    }),
+  );
+
+  // Soft cap (revision #4 + locked decision): warn but don't block.
+  const projected = (await countTenantChunks(tenantId)) + chunks.length;
+  if (projected > MAX_CHUNKS_PER_TENANT) {
+    await flagSoftCapReached(sourceId);
+    await appendSourceLog({
+      sourceId,
+      level: "info",
+      text: `Soft cap warning: tenant projected at ${projected}/${MAX_CHUNKS_PER_TENANT} chunks`,
+    });
+  }
+
+  const { chunkIds } = await insertChunksWithoutEmbeddings({
+    tenantId,
+    sourceId,
+    chunks,
+  });
+  await updateSourceStatus({
+    sourceId,
+    progress: {
+      pagesCrawled: pages.length,
+      totalPages: pages.length,
+      totalChunks: chunkIds.length,
+      chunksEmbedded: 0,
+    },
+  });
+  await appendSourceLog({
+    sourceId,
+    level: "info",
+    text: `Embedding ${chunkIds.length} chunks`,
+  });
+  await enqueueEmbedBatches({ sourceId, tenantId, chunkIds });
+
+  return { chunkCount: chunkIds.length };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Failure plumbing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * BullMQ semantics: `attemptsMade` reflects the *current* attempt count
+ * (1-indexed). When it equals `opts.attempts`, this was the last try and
+ * the source must transition to ERROR. Earlier attempts log a transient
+ * note so the user sees the worker is still trying.
+ */
+async function reportFailure(
+  job: Job<unknown, unknown, string>,
+  sourceId: string,
+  err: unknown,
+): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err);
+  const attempts = job.opts.attempts ?? 1;
+  const isFinal = err instanceof UnrecoverableError || job.attemptsMade >= attempts;
+  if (isFinal) {
+    await updateSourceStatus({ sourceId, status: "ERROR", error: message });
+    await appendSourceLog({ sourceId, level: "err", text: message });
+  } else {
+    await appendSourceLog({
+      sourceId,
+      level: "err",
+      text: `Attempt ${job.attemptsMade}/${attempts} failed (will retry): ${message}`,
+    });
+  }
 }

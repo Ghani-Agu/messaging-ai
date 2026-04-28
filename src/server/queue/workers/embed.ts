@@ -1,5 +1,5 @@
 import "server-only";
-import { Worker, type Job } from "bullmq";
+import { UnrecoverableError, Worker, type Job } from "bullmq";
 import { createRedisConnection } from "../connection";
 import {
   EMBED_QUEUE_NAME,
@@ -7,6 +7,15 @@ import {
   type EmbedJobData,
   type EmbedJobName,
 } from "../queues";
+import { embed } from "@/server/ai/embeddings";
+import {
+  appendSourceLog,
+  attachEmbeddings,
+  incrementSourceProgressEmbedded,
+  listUnembeddedChunksByIds,
+  maybeMarkSourceReady,
+  updateSourceStatus,
+} from "@/server/db/knowledge";
 
 /**
  * Worker for the `embed` queue. Each job embeds a small batch of chunk IDs
@@ -45,8 +54,66 @@ export function startEmbedWorker(): Worker<EmbedJobData, unknown, EmbedJobName> 
 }
 
 async function handleEmbedBatch(
-  _job: Job<EmbedBatchJobData, unknown, "embed-batch">,
-): Promise<unknown> {
-  // Wired up in step 5/6 once chunks start landing in the DB.
-  throw new Error("embed-batch handler not implemented yet (Phase 3, step 5/6)");
+  job: Job<EmbedBatchJobData, unknown, "embed-batch">,
+): Promise<{ embedded: number }> {
+  const { sourceId, chunkIds } = job.data;
+  try {
+    return await runEmbedBatch({ sourceId, chunkIds });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const attempts = job.opts.attempts ?? 1;
+    const isFinal = err instanceof UnrecoverableError || job.attemptsMade >= attempts;
+    if (isFinal) {
+      await updateSourceStatus({ sourceId, status: "ERROR", error: message });
+      await appendSourceLog({
+        sourceId,
+        level: "err",
+        text: `Embedding failed: ${message}`,
+      });
+    } else {
+      await appendSourceLog({
+        sourceId,
+        level: "err",
+        text: `Embed batch attempt ${job.attemptsMade}/${attempts} failed (will retry): ${message}`,
+      });
+    }
+    throw err;
+  }
+}
+
+async function runEmbedBatch(args: {
+  sourceId: string;
+  chunkIds: string[];
+}): Promise<{ embedded: number }> {
+  const { sourceId, chunkIds } = args;
+
+  // Idempotency: skip chunks that already have embeddings (from a prior
+  // partial run, or a duplicate enqueue).
+  const unembedded = await listUnembeddedChunksByIds({ chunkIds });
+  if (unembedded.length === 0) {
+    await maybeMarkSourceReady(sourceId);
+    return { embedded: 0 };
+  }
+
+  const result = await embed({
+    inputs: unembedded.map((c) => c.content),
+    inputType: "document",
+  });
+  await attachEmbeddings({
+    chunkIds: unembedded.map((c) => c.id),
+    vectors: result.vectors,
+  });
+  await incrementSourceProgressEmbedded({
+    sourceId,
+    delta: unembedded.length,
+  });
+
+  if (await maybeMarkSourceReady(sourceId)) {
+    await appendSourceLog({
+      sourceId,
+      level: "ok",
+      text: `Ready (embedded via ${result.provider})`,
+    });
+  }
+  return { embedded: unembedded.length };
 }
