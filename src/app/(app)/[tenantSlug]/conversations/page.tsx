@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { MessageSquare } from "lucide-react";
 import { getTenantContext } from "@/server/tenancy/context";
-import { PlaceholderPage } from "@/components/app/placeholder-page";
+import { listConversationsForTenant } from "@/server/db/conversations";
+import { ConversationsListClient } from "@/components/app/conversations/conversations-list-client";
 
 export const metadata: Metadata = {
   title: "Conversations",
@@ -13,13 +13,14 @@ export default async function ConversationsPage({
   params: Promise<{ tenantSlug: string }>;
 }) {
   const { tenantSlug } = await params;
-  await getTenantContext(tenantSlug);
+  const ctx = await getTenantContext(tenantSlug);
+  // Default tab is WIDGET since that's the only live channel in v1.
+  const initial = await listConversationsForTenant({
+    tenantId: ctx.tenant.id,
+    channelType: "WIDGET",
+    limit: 50,
+  });
   return (
-    <PlaceholderPage
-      icon={MessageSquare}
-      title="Conversations"
-      description="Once you connect WhatsApp, Instagram, or the website widget, every customer thread will live here — sortable, filterable, and live."
-      phaseNote="Phase 5"
-    />
+    <ConversationsListClient slug={tenantSlug} initialConversations={initial} />
   );
 }

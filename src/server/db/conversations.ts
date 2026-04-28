@@ -1,12 +1,12 @@
 import "server-only";
-import type {
-  ChannelType,
-  Conversation,
-  ConversationStatus,
-  Customer,
-  Message,
-  MessageContentType,
+import {
   Prisma,
+  type ChannelType,
+  type Conversation,
+  type ConversationStatus,
+  type Customer,
+  type Message,
+  type MessageContentType,
 } from "@prisma/client";
 import { prisma } from "./client";
 import { CONVERSATION_RESUME_MAX_AGE_MS } from "@/server/channels/widget/limits";
@@ -59,12 +59,55 @@ export type MessageAiMetadata = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Retry an operation that may fail with Prisma P2002 (unique constraint
+ * violation) due to a race between two concurrent transactions both
+ * inserting the same row. Up to MAX_ATTEMPTS attempts; on retry the
+ * upsert path inside the operation will see the now-committed row and
+ * update instead of insert.
+ *
+ * Why not just at-most-once: customer rows are upserted by
+ * (tenantId, channelType, externalId) on every inbound widget message.
+ * Two concurrent first-time messages from the same browser tab have a
+ * narrow window where both transactions take the !exists branch of the
+ * upsert and try to INSERT — one wins, the other gets P2002. A single
+ * retry is always enough in practice; we allow three for safety.
+ */
+const P2002_MAX_ATTEMPTS = 3;
+async function withP2002Retry<T>(op: () => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= P2002_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await op();
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        lastErr = err;
+        // Tiny stagger so the second attempt sees a committed winner.
+        // 5ms × attempt is enough; not a concurrency-control mechanism,
+        // just a polite yield to the event loop and the DB.
+        await new Promise((r) => setTimeout(r, 5 * attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+/**
  * Find-or-create the active conversation for an incoming widget message.
  * Resume rule: the most recent ACTIVE conversation for (tenantId, customerId)
  * with lastMessageAt within CONVERSATION_RESUME_MAX_AGE_MS is reused;
  * otherwise a new Conversation row is created. Customer is upserted by
  * (tenantId, channelType, externalId). Both writes happen in one
  * transaction so a half-created customer can never be observed.
+ *
+ * The whole transaction is wrapped in withP2002Retry — if two concurrent
+ * inbound messages from the same brand-new customer race the
+ * customer.upsert insert, the second attempt sees the committed row and
+ * goes down the update branch.
  */
 export async function resolveOrCreateConversation(args: {
   tenantId: string;
@@ -81,54 +124,56 @@ export async function resolveOrCreateConversation(args: {
   const now = new Date();
   const resumeFloor = new Date(now.getTime() - CONVERSATION_RESUME_MAX_AGE_MS);
 
-  return prisma.$transaction(async (tx) => {
-    const customer = await tx.customer.upsert({
-      where: {
-        tenantId_channelType_externalId: { tenantId, channelType, externalId },
-      },
-      update: {
-        lastSeenAt: now,
-        ...(customerHints?.name ? { name: customerHints.name } : {}),
-        ...(customerHints?.email ? { email: customerHints.email } : {}),
-        ...(customerHints?.phone ? { phone: customerHints.phone } : {}),
-      },
-      create: {
-        tenantId,
-        channelType,
-        externalId,
-        name: customerHints?.name ?? null,
-        email: customerHints?.email ?? null,
-        phone: customerHints?.phone ?? null,
-        firstSeenAt: now,
-        lastSeenAt: now,
-      },
-    });
+  return withP2002Retry(() =>
+    prisma.$transaction(async (tx) => {
+      const customer = await tx.customer.upsert({
+        where: {
+          tenantId_channelType_externalId: { tenantId, channelType, externalId },
+        },
+        update: {
+          lastSeenAt: now,
+          ...(customerHints?.name ? { name: customerHints.name } : {}),
+          ...(customerHints?.email ? { email: customerHints.email } : {}),
+          ...(customerHints?.phone ? { phone: customerHints.phone } : {}),
+        },
+        create: {
+          tenantId,
+          channelType,
+          externalId,
+          name: customerHints?.name ?? null,
+          email: customerHints?.email ?? null,
+          phone: customerHints?.phone ?? null,
+          firstSeenAt: now,
+          lastSeenAt: now,
+        },
+      });
 
-    const existing = await tx.conversation.findFirst({
-      where: {
-        tenantId,
-        customerId: customer.id,
-        status: "ACTIVE",
-        lastMessageAt: { gte: resumeFloor },
-      },
-      orderBy: { lastMessageAt: "desc" },
-    });
-    if (existing) {
-      return { conversation: existing, customer, resumed: true };
-    }
+      const existing = await tx.conversation.findFirst({
+        where: {
+          tenantId,
+          customerId: customer.id,
+          status: "ACTIVE",
+          lastMessageAt: { gte: resumeFloor },
+        },
+        orderBy: { lastMessageAt: "desc" },
+      });
+      if (existing) {
+        return { conversation: existing, customer, resumed: true };
+      }
 
-    const created = await tx.conversation.create({
-      data: {
-        tenantId,
-        customerId: customer.id,
-        channelId,
-        status: "ACTIVE",
-        aiEnabled: true,
-        lastMessageAt: now,
-      },
-    });
-    return { conversation: created, customer, resumed: false };
-  });
+      const created = await tx.conversation.create({
+        data: {
+          tenantId,
+          customerId: customer.id,
+          channelId,
+          status: "ACTIVE",
+          aiEnabled: true,
+          lastMessageAt: now,
+        },
+      });
+      return { conversation: created, customer, resumed: false };
+    }),
+  );
 }
 
 /** Tenant-scoped fetch; null if not in this tenant. */
@@ -180,6 +225,13 @@ export type ConversationListRow = Conversation & {
   channel: { id: string; type: ChannelType; displayName: string };
   customer: Pick<Customer, "id" | "name" | "email" | "phone" | "externalId">;
   _count: { messages: number };
+  /**
+   * Most-recent message preview, populated only when
+   * listConversationsForTenant is called with `withLastMessage: true`.
+   * Always 0 or 1 elements. Used by the dashboard list to render the
+   * inbox-style preview line.
+   */
+  messages: Pick<Message, "id" | "direction" | "sender" | "content" | "createdAt">[];
 };
 
 const CONVERSATION_LIST_DEFAULT_LIMIT = 50;
@@ -239,6 +291,21 @@ export function listConversationsForTenant(args: {
         },
       },
       _count: { select: { messages: true } },
+      // Most-recent message — 0 or 1 row per conversation. Drives the
+      // dashboard inbox preview line. Marginal cost on the brain hot
+      // path (which doesn't call this helper at all) and required for
+      // the dashboard list, so always-on is the simplest tradeoff.
+      messages: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: {
+          id: true,
+          direction: true,
+          sender: true,
+          content: true,
+          createdAt: true,
+        },
+      },
     },
   });
 }
