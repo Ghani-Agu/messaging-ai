@@ -61,7 +61,7 @@ export function RetrievalTestPanel({ slug }: { slug: string }) {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]" />
           <input
-            placeholder="what are your shipping costs"
+            placeholder="ask anything your customers might"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] py-2 pl-9 pr-3 text-body text-[var(--text-primary)] outline-none focus:border-[var(--accent-base)]"
