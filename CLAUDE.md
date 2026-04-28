@@ -54,6 +54,8 @@ Workflow per phase:
 - Never call an LLM API directly outside `src/server/ai/`.
 - Never trust client-provided `tenantId`.
 - Never hard-code colors, font sizes, spacing, or motion values — always use the design tokens (`src/app/globals.css` for CSS, `src/lib/design-tokens.ts` for JS, `src/lib/motion.ts` for animations).
+- Never expose a streaming endpoint as `GET + EventSource`. Always `POST + ReadableStream` with SSE-shaped data (`data: { ... }\n\n` framing for `delta` and `done` events). Settled twice in Phase 5: POST keeps tenant slug / auth headers / structured request body intact, and the data-events shape lets the client demux without reconnect logic.
+- Never write a concurrent upsert against a unique-keyed table without wrapping in `withP2002Retry` (`src/server/db/conversations.ts`). The race is real for any `(tenantId, channelType, externalId)` upsert under Phase 6/7 channel adapters — two simultaneous first-time messages from the same brand-new customer can both take the `!exists` branch and one gets `P2002`. Second attempt sees the committed row and goes down the update branch.
 - Never `git add -A` blindly — `.claude/`, `.env.local`, and other locals can sneak in. Stage by path.
 - Never `git commit --amend` or `--no-verify` without explicit project-lead approval.
 
@@ -146,6 +148,23 @@ For any change touching `KnowledgeChunk` / `KnowledgeSource`:
 5. `npm run db:migrate` to apply.
 6. `npx dotenv -e .env.local -- node scripts/verify-knowledge-schema.mjs` to confirm.
 
+### Prisma migrate dev: drift prompt + DROP INDEX inspection
+
+Two interactive surprises around `prisma migrate dev`. Both stem from the same root cause as the HNSW section above: PSL doesn't model HNSW indexes or partial-unique-on-JSON, so the live DB will *always* look "drifted" to Prisma's diff engine.
+
+**The drift-fix prompt — always Ctrl+C.** When `prisma migrate dev` detects schema/DB drift it asks interactively whether to "create a drift fix migration." **Skip with Ctrl+C every time.** Accepting it generates a `DROP INDEX "KnowledgeChunk_embedding_hnsw"` (and would happily target any future raw-SQL index the same way) — applying that wipes irreplaceable indexes that took minutes to rebuild against the embedded corpus. The drift is intentional; the live DB state is correct. To verify migrations applied without invoking the drift detector, use one of:
+
+- `npx dotenv -e .env.local -- prisma migrate status` — read-only, no shadow DB, no prompts.
+- `npm run db:migrate:deploy` — applies pending migrations only; no drift check, no shadow DB.
+
+**Generated SQL inspection — standing rule for every new migration.** Every `prisma migrate dev --create-only` run can slip a `DROP INDEX` line targeting any PSL-invisible raw-SQL index into the generated `migration.sql`. Before `npm run db:migrate`, open the migration and strip any `DROP INDEX` line that targets one of:
+
+- `KnowledgeChunk_embedding_hnsw` — HNSW on `KnowledgeChunk.embedding` (Phase 3).
+- `Channel_widget_publicKey_unique` — partial unique on `config->>'publicKey'` where `type='WIDGET'` (Phase 6).
+- Any future raw-SQL index added the same way — when you add one, add it to this list too.
+
+When you strip a line, leave a one-line `-- INTENTIONAL: do not drop <index name> — managed via raw SQL` comment in its place so a future maintainer doesn't undo the strip. The verify scripts (`scripts/verify-knowledge-schema.mjs`, `scripts/verify-channels-schema.mjs`) catch missed strips after apply and should be run after every migration.
+
 ### Phase 6: widget public-key partial unique index is invisible to Prisma
 
 The same PSL gap that hides the HNSW index also hides the partial unique index on the widget's public key. The lookup the widget API runs on every request — `WHERE ("config"->>'publicKey') = $1 AND "type"='WIDGET'` — is served by:
@@ -204,7 +223,7 @@ The full original Phase 4 build order is in this conversation's context. Renumbe
 
 1. **Real `src/server/ai/claude.ts`.** Implement `class RealClaudeClient implements ClaudeClient` using native `fetch` + `AbortSignal.timeout` per CLAUDE.md §6. **First sub-task:** run `scripts/list-anthropic-models.ts` (already shipped — read-only, awaiting key) and have the project lead pick the dated Sonnet 4.6 snapshot. Pin as `ANTHROPIC_MODEL_DEFAULT` const, env-overridable via `ANTHROPIC_MODEL`. Implement `sendReply` first; `streamReply` follows in step 3.
 2. **`scripts/brain-eval.ts` + `npm run brain:eval`.** 8-row query bank (AR / FR / EN / Darija-Arabizi / Darija-Arabic-script / FR↔Darija code-switch / off-topic / refund-anger). Validate **reply text** language with a langid library (e.g. `franc`), **not** Claude's self-reported `send_reply.language` — the self-report is a null check on Claude's introspection; we want to catch "Claude says Darija, actually replied MSA" regressions. For Darija specifically, accept either Arabic-script-with-Algerian-vocab OR Arabizi (Latin + numeral-stand-ins for ع/ح/ق); document the heuristic inline. Run after every prompt change. **Gate: must pass before step 3.**
-3. **Streaming API route** — `src/app/api/playground/stream/route.ts`. `ReadableStream` of SSE-style events (`delta` for text deltas, `done` for the structured `send_reply` args + computed confidence + citations). The streaming variant on `ClaudeClient` (`streamReply`) gets implemented on the real wrapper at this point.
+3. **Streaming API route** — `src/app/api/playground/stream/route.ts`. `ReadableStream` of SSE-style events (`delta` for text deltas, `done` for the structured `send_reply` args + computed confidence + citations). The streaming variant on `ClaudeClient` (`streamReply`) gets implemented on the real wrapper at this point. **`streamReply` must consume Anthropic's native SSE stream** — the `content_block_delta` / `text_delta` / `message_stop` events on `/v1/messages` with `stream: true` — and pipe individual deltas as Claude generates them. **It must not call `sendReply` and chunk the resulting text server-side.** The chunk-after-the-fact shape currently in `runBrainStream` (`src/server/ai/orchestrator.ts:244`) is a *stub-only* pattern: `StubClaudeClient` returns the full reply in one shot, so the orchestrator slices it into fake deltas to keep the dashboard playground UI development unblocked. Real streaming requires native event consumption — otherwise the user sees no incremental text until the full reply has been generated server-side, which defeats the point.
 4. **Playground UI** — `src/app/(app)/[tenantSlug]/playground/page.tsx`. Chat surface, breathing-cursor stream, sidebar (detected-language badge, citations with chunk previews, groundedness, computed confidence, escalation pill with reason). All design tokens — no hard-coded values.
 5. **Sidebar voice-profile preset switcher** (read-only persistence this phase). The Phase-4 demo lets you A/B tone live without writing back to the DB. Persisted edit UI lives in Phase 9 (onboarding wizard).
 
