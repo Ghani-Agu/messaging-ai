@@ -13,6 +13,14 @@ import type { Citation, EscalationReason, Message, SupportedLanguage } from "./t
  * When integration lands (commit 6), the dispatcher in api.ts is
  * replaced by a real fetch + ReadableStream parser. The four shapes
  * here become regression cases for the eval harness.
+ *
+ * NOTE on language behavior: the canned reply languages here are
+ * hardcoded per shape (e.g. PAYMENT_DISPUTE always replies in Arabic
+ * script) and do NOT mirror the customer's input language. This is
+ * deliberate for the Phase-5 demo — it exercises the LTR-Arabizi and
+ * RTL-Arabic-script rendering paths regardless of what the demoer
+ * types. Real Claude (when Anthropic credits land) follows Block A's
+ * LANGUAGE RULES and mirrors the customer's language and script.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
