@@ -271,7 +271,7 @@ messaging-ai/
 │   │   │   ├── [tenantSlug]/         # Tenant-scoped routes
 │   │   │   │   ├── dashboard/
 │   │   │   │   ├── conversations/
-│   │   │   │   ├── knowledge/
+│   │   │   │   ├── knowledge/        # /knowledge list + [sourceId]/ detail
 │   │   │   │   ├── channels/
 │   │   │   │   ├── playground/
 │   │   │   │   ├── settings/
@@ -300,11 +300,18 @@ messaging-ai/
 │   │   └── validators.ts             # Zod schemas
 │   ├── server/                       # Server-only code
 │   │   ├── auth/                     # NextAuth config
-│   │   ├── db/                       # Prisma client + helpers
+│   │   ├── db/                       # Prisma client + per-domain helpers
+│   │   │   ├── client.ts             # PrismaClient singleton
+│   │   │   ├── tenancy.ts            # Tenant / TenantUser / membership
+│   │   │   └── knowledge.ts          # KnowledgeSource / KnowledgeChunk
+│   │   │                             #   incl. raw-SQL vectorSearch /
+│   │   │                             #   lexicalSearch, log append helpers
 │   │   ├── ai/                       # LLM clients + prompt templates
 │   │   │   ├── claude.ts
 │   │   │   ├── openai.ts
-│   │   │   ├── embeddings.ts
+│   │   │   ├── embeddings.ts         # Voyage primary + OpenAI fallback,
+│   │   │   │                         #   shared 1024-dim output, sliding
+│   │   │   │                         #   circuit breaker
 │   │   │   ├── prompts/              # System prompts per use case
 │   │   │   └── orchestrator.ts       # Main "brain" loop
 │   │   ├── channels/                 # Channel adapters
@@ -312,14 +319,20 @@ messaging-ai/
 │   │   │   ├── instagram/
 │   │   │   └── widget/
 │   │   ├── knowledge/                # Ingestion pipeline
-│   │   │   ├── crawler.ts            # Firecrawl wrapper
-│   │   │   ├── parser.ts             # LlamaParse wrapper
-│   │   │   ├── chunker.ts
-│   │   │   └── retriever.ts
+│   │   │   ├── crawler.ts            # Firecrawl REST over native fetch
+│   │   │   ├── parser.ts             # LlamaParse REST over native fetch
+│   │   │   ├── chunker.ts            # Token-aware recursive splitter
+│   │   │   ├── retriever.ts          # Hybrid vector + lexical, RRF fused
+│   │   │   ├── actions.ts            # Server Actions exposed to the UI
+│   │   │   ├── limits.ts             # Locked Phase-3 constants
+│   │   │   └── errors.ts             # PermanentError extends Unrecoverable
 │   │   ├── queue/                    # BullMQ setup + workers
 │   │   │   ├── queues.ts
+│   │   │   ├── connection.ts         # Upstash Redis (rediss://, family=0)
 │   │   │   ├── workers/
 │   │   │   └── jobs.ts
+│   │   ├── storage/                  # Supabase Storage (knowledge files)
+│   │   │   └── supabase.ts
 │   │   ├── billing/                  # Stripe wrapper
 │   │   ├── tenancy/                  # Multi-tenant helpers
 │   │   └── escalation/               # Human handoff logic
@@ -355,6 +368,11 @@ Defined in `prisma/schema.prisma`. Multi-tenancy is row-level: every tenant-scop
 - **TenantUser** — join table. Fields: `id`, `tenantId`, `userId`, `role` (OWNER / ADMIN / AGENT / VIEWER), `createdAt`. Unique on `(tenantId, userId)`.
 
 ### Knowledge
+
+> _JSON column shapes for `KnowledgeSource` are defined alongside their TypeScript types in `src/server/db/knowledge.ts` — these columns are deliberately schema-less in Prisma:_
+>
+> _- `progress`: `{ pagesCrawled, totalPages, totalChunks, chunksEmbedded }` — written by the worker during ingestion to drive the polling UI._
+> _- `metadata.log[]`: `{ ts, level: "info"|"ok"|"err", text }`, capped at 50 entries via `appendSourceLog`._
 
 - **KnowledgeSource** — a source of truth for the AI. Fields: `id`, `tenantId`, `type` (WEBSITE / FILE / MANUAL), `name`, `sourceUrl`, `status` (PENDING / PROCESSING / READY / ERROR), `lastIngestedAt`, `metadata` (JSON)
 - **KnowledgeChunk** — chunked, embedded text. Fields: `id`, `sourceId`, `tenantId`, `content`, `embedding` (vector), `metadata` (JSON: page URL, section, etc.), `tokenCount`. Has pgvector index on `embedding`.
@@ -657,3 +675,8 @@ To be revisited at the appropriate phase:
 - White-label option (v2): subdomain-based tenancy
 - Mobile app (v2): React Native or just a great PWA?
 - Fine-tuned Darija model (v2): if prompt-based Darija quality plateaus, train an open model
+
+### Known limitations
+
+- **HNSW indexes are invisible to Prisma.** Prisma 6.x's `@@index(type: …)` accepts only `BTree | Hash | Gist | Gin | SpGist | Brin`. The HNSW index on `KnowledgeChunk.embedding` and the GENERATED `searchVector` column are added via raw SQL in `prisma/migrations/20260427235200_add_knowledge_models/migration.sql`. As a result `prisma migrate diff` permanently reports drift on `KnowledgeChunk.embedding` — that is intentional. Workflow + verification documented in CLAUDE.md §6 (`scripts/verify-knowledge-schema.mjs` confirms the index after each migration).
+- **No third-party HTTP-client SDKs in worker processes.** Phase 3 hit a `connect ETIMEDOUT` regression caused by an axios-based SDK with no default timeout in a long-lived BullMQ worker. The standing rule (CLAUDE.md §6) is: any HTTP call from a worker uses native `fetch` + explicit `AbortSignal.timeout()`. `crawler.ts` and `parser.ts` are the reference shape.
