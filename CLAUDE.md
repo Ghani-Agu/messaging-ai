@@ -146,6 +146,17 @@ For any change touching `KnowledgeChunk` / `KnowledgeSource`:
 5. `npm run db:migrate` to apply.
 6. `npx dotenv -e .env.local -- node scripts/verify-knowledge-schema.mjs` to confirm.
 
+### Long-running workers + third-party HTTP clients
+
+We hit a Phase-3 incident where the BullMQ worker began failing every Firecrawl crawl with `connect ETIMEDOUT 35.245.250.27:443`, while `curl` from the same machine returned 200 in <1 s. Root cause was specific to the SDK transport, not the network:
+
+- `@mendable/firecrawl-js` 4.x uses axios with no default timeout on the legacy v1 path (`postRequest` only sets `timeout` when the caller passes `params.timeout`).
+- axios with no explicit agent reuses Node's `https.globalAgent` keepalive pool. In a long-lived worker, that pool collects sockets the upstream LB has already half-closed. The next axios call reuses one, the write hangs, and Node waits for the OS-level TCP retransmit (~75–120 s on Windows) before surfacing as ETIMEDOUT.
+
+Fix: replace the SDK with native `fetch` + `AbortSignal.timeout()`. Diagnostic + write-up: `scripts/firecrawl-diag.ts`. Upstream issues with the same fingerprint: firecrawl/firecrawl#1912, #2185, #2280.
+
+**Standing rule for this codebase:** any HTTP call from a worker process — or any code path reachable from one — uses native `fetch` with an explicit `AbortSignal.timeout()`. No third-party HTTP-client SDKs in workers (axios, got, superagent, ky, openai-style SDK transports, …). Wrap providers ourselves the way `crawler.ts` and `parser.ts` do, and route 4xx (except 429) through `PermanentError` from `src/server/knowledge/errors.ts` so BullMQ stops retrying. Everything else (5xx, 429, network, AbortError) stays a plain `Error` and gets the existing `attempts: 5` retry budget.
+
 When this section grows large, group by tool.
 
 ---
