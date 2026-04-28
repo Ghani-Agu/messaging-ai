@@ -18,7 +18,9 @@
     "db:seed": "dotenv -e .env.local -- tsx prisma/seed.ts",
     "db:studio": "dotenv -e .env.local -- prisma studio",
     "check:env": "tsx scripts/check-env.ts",
-    "grant:superadmin": "dotenv -e .env.local -- tsx scripts/grant-superadmin.ts"
+    "grant:superadmin": "dotenv -e .env.local -- tsx scripts/grant-superadmin.ts",
+    "test": "vitest",
+    "test:run": "vitest run"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
@@ -39,6 +41,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "resend": "^6.12.2",
+    "server-only": "^0.0.1",
     "tailwind-merge": "^2.6.0",
     "zod": "^3.24.0"
   },
@@ -48,6 +51,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@vitest/ui": "^2.1.9",
     "dotenv-cli": "^11.0.0",
     "eslint": "^9.18.0",
     "eslint-config-next": "^15.5.0",
@@ -57,7 +61,8 @@
     "prisma": "^6.1.0",
     "tailwindcss": "^4.1.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.9"
   },
   "engines": {
     "node": ">=20.0.0"
