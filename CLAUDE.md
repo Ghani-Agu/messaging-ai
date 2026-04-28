@@ -146,6 +146,22 @@ For any change touching `KnowledgeChunk` / `KnowledgeSource`:
 5. `npm run db:migrate` to apply.
 6. `npx dotenv -e .env.local -- node scripts/verify-knowledge-schema.mjs` to confirm.
 
+### Phase 6: widget public-key partial unique index is invisible to Prisma
+
+The same PSL gap that hides the HNSW index also hides the partial unique index on the widget's public key. The lookup the widget API runs on every request — `WHERE ("config"->>'publicKey') = $1 AND "type"='WIDGET'` — is served by:
+
+```
+CREATE UNIQUE INDEX "Channel_widget_publicKey_unique"
+    ON "Channel" (("config" ->> 'publicKey'))
+    WHERE "type" = 'WIDGET' AND ("config" ->> 'publicKey') IS NOT NULL;
+```
+
+PSL can't model this — Prisma's `@@unique` doesn't accept JSON path expressions, and partial-WHERE by enum value isn't supported either. The index is created via raw SQL appended to `20260428205650_add_channel_models/migration.sql` (same pattern as the HNSW index in `20260427235200_add_knowledge_models`).
+
+**Standing rule when generating future migrations:** every `prisma migrate dev --create-only` run will slip a `DROP INDEX "KnowledgeChunk_embedding_hnsw"` line into the generated SQL — strip it. (The widget public-key index is only "missing" from PSL, not "extra in DB", so Prisma doesn't try to drop it; only the HNSW one needs stripping.) `scripts/verify-channels-schema.mjs` confirms the partial unique index is present and that the planner picks it for the widget public-key lookup (EXPLAIN with `enable_seqscan=off`); run it whenever the Channel schema changes.
+
+Same workflow as Phase 3: `npm run db:migrate -- --create-only --name <name>`, edit, `npm run db:migrate` to apply, then run both verify scripts.
+
 ### Long-running workers + third-party HTTP clients
 
 We hit a Phase-3 incident where the BullMQ worker began failing every Firecrawl crawl with `connect ETIMEDOUT 35.245.250.27:443`, while `curl` from the same machine returned 200 in <1 s. Root cause was specific to the SDK transport, not the network:

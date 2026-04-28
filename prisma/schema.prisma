@@ -52,6 +52,43 @@ enum SourceStatus {
   ERROR
 }
 
+enum ChannelType {
+  WHATSAPP
+  INSTAGRAM
+  WIDGET
+}
+
+enum ChannelStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+enum ConversationStatus {
+  ACTIVE
+  PAUSED
+  CLOSED
+  HUMAN_HANDLING
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageSender {
+  CUSTOMER
+  AI
+  HUMAN_AGENT
+}
+
+enum MessageContentType {
+  TEXT
+  IMAGE
+  VOICE
+  FILE
+}
+
 model Tenant {
   id               String       @id @default(cuid())
   slug             String       @unique
@@ -68,6 +105,10 @@ model Tenant {
   lastUsedByUsers  User[]            @relation("UserLastTenant")
   knowledgeSources KnowledgeSource[]
   knowledgeChunks  KnowledgeChunk[]
+  channels         Channel[]
+  customers        Customer[]
+  conversations    Conversation[]
+  messages         Message[]
 
   @@index([slug])
 }
@@ -88,10 +129,12 @@ model User {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
-  tenants        TenantUser[]
-  accounts       Account[]
-  sessions       Session[]
-  lastUsedTenant Tenant?      @relation("UserLastTenant", fields: [lastUsedTenantId], references: [id], onDelete: SetNull)
+  tenants               TenantUser[]
+  accounts              Account[]
+  sessions              Session[]
+  lastUsedTenant        Tenant?        @relation("UserLastTenant", fields: [lastUsedTenantId], references: [id], onDelete: SetNull)
+  assignedConversations Conversation[] @relation("ConversationAssignedUser")
+  sentMessages          Message[]      @relation("MessageSenderUser")
 
   @@index([email])
 }
@@ -234,4 +277,122 @@ model KnowledgeChunk {
   // gap is intentional; do not "fix" it by adding a non-HNSW @@index.
   // Lexical full-text index is supported and declared:
   @@index([searchVector], type: Gin, map: "KnowledgeChunk_searchVector_gin")
+}
+
+// =====================================================================
+// Channels (Phase 6 — widget; WHATSAPP/INSTAGRAM scaffolded in 6/7)
+// =====================================================================
+//
+// Channel: a tenant-connected messaging surface. `config` is per-type and
+// schema-less in Prisma — typed in src/server/db/channels.ts:
+//   - WIDGET:   { publicKey: string, displayName?: string, themeAccent?: string, allowedOrigins?: string[] }
+//   - WHATSAPP / INSTAGRAM: provider metadata (Phase 6/7).
+// `credentials` holds encrypted-at-rest secrets (empty {} for WIDGET).
+//
+// `(tenantId, type)` is unique: one channel per type per tenant in v1.
+//
+// The widget public-key lookup is served by a partial UNIQUE B-tree on
+// the JSON path `config->>'publicKey'`. PSL can't express it (no JSON
+// path indexes, no partial-WHERE by enum value), so it lives as raw SQL
+// in 20260428xxxxxx_add_channel_models — same pattern as the HNSW index
+// on KnowledgeChunk.embedding. `prisma migrate diff` will permanently
+// report it as schema-side missing; that gap is intentional.
+//
+// Customer: unique per (tenantId, channelType, externalId). Widgets mint
+// a UUID client-side; that UUID is the externalId.
+//
+// Conversation: a thread. Widget resume rule lives in
+// src/server/channels/widget/limits.ts (CONVERSATION_RESUME_MAX_AGE_MS).
+//
+// Message: a single message. aiMetadata is the orchestrator's diagnostic
+// envelope (typed in src/server/db/conversations.ts).
+
+model Channel {
+  id          String        @id @default(cuid())
+  tenantId    String
+  type        ChannelType
+  displayName String
+  status      ChannelStatus @default(CONNECTED)
+  config      Json          @default("{}")
+  credentials Json          @default("{}")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([tenantId, type])
+  @@index([tenantId])
+}
+
+model Customer {
+  id          String      @id @default(cuid())
+  tenantId    String
+  externalId  String
+  channelType ChannelType
+  name        String?
+  phone       String?
+  email       String?
+  metadata    Json        @default("{}")
+  firstSeenAt DateTime    @default(now())
+  lastSeenAt  DateTime    @default(now())
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([tenantId, channelType, externalId])
+  @@index([tenantId])
+}
+
+model Conversation {
+  id             String             @id @default(cuid())
+  tenantId       String
+  customerId     String
+  channelId      String
+  status         ConversationStatus @default(ACTIVE)
+  aiEnabled      Boolean            @default(true)
+  assignedUserId String?
+  lastMessageAt  DateTime           @default(now())
+  summary        String?
+  language       String?
+  sentiment      String?
+  metadata       Json               @default("{}")
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer     Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  channel      Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  assignedUser User?     @relation("ConversationAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages     Message[]
+
+  // Widget resume lookup: WHERE tenantId=? AND customerId=? AND status='ACTIVE' ORDER BY lastMessageAt DESC LIMIT 1
+  @@index([tenantId, customerId, status, lastMessageAt(sort: Desc)])
+  // Live conversations list: WHERE tenantId=? ORDER BY lastMessageAt DESC
+  @@index([tenantId, lastMessageAt(sort: Desc)])
+  @@index([channelId])
+  @@index([assignedUserId])
+}
+
+model Message {
+  id             String             @id @default(cuid())
+  conversationId String
+  tenantId       String
+  direction      MessageDirection
+  sender         MessageSender
+  senderUserId   String?
+  content        String
+  contentType    MessageContentType @default(TEXT)
+  mediaUrl       String?
+  aiMetadata     Json?
+  createdAt      DateTime           @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  senderUser   User?        @relation("MessageSenderUser", fields: [senderUserId], references: [id], onDelete: SetNull)
+
+  // Reading conversation: WHERE conversationId=? ORDER BY createdAt ASC
+  @@index([conversationId, createdAt])
+  @@index([tenantId])
+  @@index([senderUserId])
 }
