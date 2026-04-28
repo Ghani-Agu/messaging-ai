@@ -31,6 +31,8 @@ const REQUIRED_BY_PHASE: Record<string, string[]> = {
     "FIRECRAWL_API_KEY",
     "LLAMAPARSE_API_KEY",
     "VOYAGE_API_KEY",
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
   ],
   "Phase 4 (AI brain)": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
   "Phase 6 (WhatsApp)": ["WHATSAPP_360DIALOG_API_KEY"],

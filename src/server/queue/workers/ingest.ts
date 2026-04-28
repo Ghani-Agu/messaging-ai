@@ -27,6 +27,12 @@ import {
   getCrawlStatus,
   startCrawl,
 } from "@/server/knowledge/crawler";
+import {
+  fetchParseResult,
+  getParseStatus,
+  startParse,
+} from "@/server/knowledge/parser";
+import { downloadToBuffer } from "@/server/storage/supabase";
 import { MAX_CHUNKS_PER_TENANT } from "@/server/knowledge/limits";
 
 /**
@@ -100,10 +106,136 @@ async function handleCrawlWebsite(
 }
 
 async function handleParseFile(
-  _job: Job<ParseFileJobData, unknown, "parse-file">,
-): Promise<unknown> {
-  // Wired up in step 6.
-  throw new Error("parse-file handler not implemented yet (Phase 3, step 6)");
+  job: Job<ParseFileJobData, unknown, "parse-file">,
+): Promise<{ chunkCount: number }> {
+  const { sourceId, tenantId, storagePath, filename } = job.data;
+  try {
+    return await runParseFile({ sourceId, tenantId, storagePath, filename });
+  } catch (err) {
+    await reportFailure(job, sourceId, err);
+    throw err;
+  }
+}
+
+async function runParseFile(args: {
+  sourceId: string;
+  tenantId: string;
+  storagePath: string;
+  filename: string;
+}): Promise<{ chunkCount: number }> {
+  const { sourceId, tenantId, storagePath, filename } = args;
+  await updateSourceStatus({ sourceId, status: "PROCESSING", error: null });
+
+  // Idempotency (blocking revision #1): skip the re-parse if chunks
+  // already exist for this source.
+  if (await chunkExistsForSource(sourceId)) {
+    const unembedded = await listUnembeddedChunkIdsForSource(sourceId);
+    await appendSourceLog({
+      sourceId,
+      level: "info",
+      text: `Resuming: ${unembedded.length} chunks awaiting embeddings`,
+    });
+    if (unembedded.length === 0) {
+      await maybeMarkSourceReady(sourceId);
+      return { chunkCount: 0 };
+    }
+    await enqueueEmbedBatches({ sourceId, tenantId, chunkIds: unembedded });
+    return { chunkCount: 0 };
+  }
+
+  await appendSourceLog({
+    sourceId,
+    level: "info",
+    text: `Downloading ${filename}`,
+  });
+  const buffer = await downloadToBuffer(storagePath);
+
+  // Detect MIME from filename — we trust the value the Server Action wrote
+  // into source.metadata.mime, but the worker doesn't refetch that here;
+  // LlamaParse only needs a hint, and the actual format is in the bytes.
+  const mime = inferMime(filename);
+  await appendSourceLog({
+    sourceId,
+    level: "info",
+    text: `Parsing ${filename} via LlamaParse`,
+  });
+  const { jobId: parseJobId } = await startParse({
+    fileBuffer: buffer,
+    filename,
+    mime,
+  });
+
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  for (;;) {
+    if (Date.now() > deadline) {
+      throw new Error("LlamaParse polling timed out after 7 minutes");
+    }
+    const status = await getParseStatus(parseJobId);
+    if (status.state === "SUCCESS") break;
+    if (status.state === "ERROR") {
+      throw new UnrecoverableError(
+        status.error ?? "LlamaParse reported failure",
+      );
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  const { markdown } = await fetchParseResult(parseJobId);
+  if (!markdown.trim()) {
+    throw new UnrecoverableError(
+      "LlamaParse returned empty markdown — file may be unreadable",
+    );
+  }
+
+  await appendSourceLog({
+    sourceId,
+    level: "info",
+    text: `Parsed; chunking ${markdown.length} chars`,
+  });
+  const chunks = chunkMarkdown({
+    content: markdown,
+    sourceUrl: storagePath,
+    initialHeadingPath: [filename],
+  });
+
+  const projected = (await countTenantChunks(tenantId)) + chunks.length;
+  if (projected > MAX_CHUNKS_PER_TENANT) {
+    await flagSoftCapReached(sourceId);
+    await appendSourceLog({
+      sourceId,
+      level: "info",
+      text: `Soft cap warning: tenant projected at ${projected}/${MAX_CHUNKS_PER_TENANT} chunks`,
+    });
+  }
+
+  const { chunkIds } = await insertChunksWithoutEmbeddings({
+    tenantId,
+    sourceId,
+    chunks,
+  });
+  await updateSourceStatus({
+    sourceId,
+    progress: {
+      totalChunks: chunkIds.length,
+      chunksEmbedded: 0,
+    },
+  });
+  await appendSourceLog({
+    sourceId,
+    level: "info",
+    text: `Embedding ${chunkIds.length} chunks`,
+  });
+  await enqueueEmbedBatches({ sourceId, tenantId, chunkIds });
+  return { chunkCount: chunkIds.length };
+}
+
+function inferMime(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  return "text/plain";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
