@@ -98,6 +98,53 @@ export function getVoiceProfile(settings: unknown): VoiceProfile {
 
 export const WIDGET_PUBLIC_KEY_REGEX = /^wgt_pk_[a-z0-9]{32}$/;
 
+/**
+ * Parse, validate, and canonicalize an origin string. Lowercases the host,
+ * drops any trailing slash, drops any path/query/hash. Throws on anything
+ * that doesn't parse as a URL with an http(s) scheme.
+ */
+export function canonicalizeOrigin(raw: string): string {
+  const u = new URL(raw.trim());
+  if (u.protocol !== "https:" && u.protocol !== "http:") {
+    throw new Error(`unsupported origin protocol: ${u.protocol}`);
+  }
+  // URL.origin already lowercases the host and drops the path; default
+  // ports are stripped; trailing slash is never part of `.origin`.
+  return u.origin;
+}
+
+const originStringSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .transform((v, ctx) => {
+    try {
+      return canonicalizeOrigin(v);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `not a parseable origin: ${(err as Error).message}`,
+      });
+      return z.NEVER;
+    }
+  });
+
+const rateLimitWindowSchema = z.object({
+  windowSec: z.number().int().min(1).max(86400),
+  capacity: z.number().int().min(1).max(100000),
+});
+
+/**
+ * Per-channel rate-limit override. Mirrors the RateLimits type in
+ * src/server/channels/widget/rate-limit.ts. Phase-6 stores any override
+ * here; Phase 9 billing tiers will set values via the same path.
+ */
+export const widgetRateLimitsSchema = z.object({
+  burst: rateLimitWindowSchema.optional(),
+  sustain: rateLimitWindowSchema.optional(),
+});
+
 export const widgetChannelConfigSchema = z.object({
   publicKey: z.string().regex(WIDGET_PUBLIC_KEY_REGEX, "expected wgt_pk_ + 32 hex chars"),
   // Server-confirmed business name. When set, overrides the embed's data-name
@@ -106,10 +153,13 @@ export const widgetChannelConfigSchema = z.object({
   // CSS color string (hex / hsl / oklch). Tenant-side override of the
   // widget's accent. Validated more strictly when the channels-page UI lands.
   themeAccent: z.string().trim().min(1).max(64).optional(),
-  // Origins permitted to embed the widget. Each entry is a serialized origin
-  // ("https://example.com"); empty array means "no restriction" in v1 (Phase 9
-  // billing tiers will add enforcement).
-  originsAllowlist: z.array(z.string().trim().min(1).max(255)).max(20).default([]),
+  // Origins permitted to embed the widget. Each entry is canonicalized
+  // (lowercased host, no trailing slash, no path) on save. Empty array means
+  // "no restriction" in v1 (Phase 9 billing tiers will add enforcement).
+  originsAllowlist: z.array(originStringSchema).max(20).default([]),
+  // Optional per-channel override of the widget rate-limit windows. Falls
+  // back to WIDGET_RATE_LIMIT_DEFAULTS when omitted.
+  rateLimits: widgetRateLimitsSchema.optional(),
 });
 export type WidgetChannelConfig = z.infer<typeof widgetChannelConfigSchema>;
 

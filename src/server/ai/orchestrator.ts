@@ -208,3 +208,36 @@ function extractUrl(c: RetrievedChunk): string | undefined {
   if (typeof m.sourceURL === "string") return m.sourceURL;
   return undefined;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Streaming variant
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type BrainStreamDelta = { type: "delta"; text: string };
+export type BrainStreamDone = { type: "done"; result: BrainResult };
+export type BrainStreamEvent = BrainStreamDelta | BrainStreamDone;
+
+/**
+ * Streaming variant of runBrain. AsyncGenerator that yields zero or more
+ * `delta` events (text fragments, in order) followed by exactly one
+ * `done` event carrying the complete BrainResult.
+ *
+ * Phase 6c shape: a thin wrapper around runBrain that emits the full
+ * reply as a single `delta` then `done`. The route handler streams those
+ * to the widget exactly the same way it will stream real Anthropic
+ * deltas, so wiring is end-to-end correct from day one.
+ *
+ * Phase 6d (next commit) will replace this body with codepoint-chunked
+ * streaming that mirrors widget/src/api.ts's mockBrainStream cadence
+ * (~8 codepoints per chunk, ~35ms apart). Real Anthropic SSE streaming
+ * lands when the API key arrives (CLAUDE.md §7a resumption checklist
+ * step 3) — at which point streamReply replaces the runBrain call here
+ * and yields native deltas. Wire shape stays unchanged.
+ */
+export async function* runBrainStream(
+  input: BrainInput,
+): AsyncGenerator<BrainStreamEvent> {
+  const result = await runBrain(input);
+  yield { type: "delta", text: result.reply };
+  yield { type: "done", result };
+}
