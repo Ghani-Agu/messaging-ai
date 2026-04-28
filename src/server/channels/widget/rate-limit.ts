@@ -29,6 +29,12 @@ import { widgetRateLimitsSchema } from "@/lib/validators";
  * inbound events only. Counting outbound would let abusive operators
  * starve their own customers (one inbound triggers one AI reply, and
  * doubling the count halves the effective budget for free).
+ *
+ * Rejected requests still increment both counters — the limiter counts
+ * attempts, not successes. An attack triggering burst rejection will
+ * accelerate sustain consumption; this is intentional defensive
+ * behavior. Post-attack recovery takes one window (max 60s for burst,
+ * 1h for sustain).
  */
 
 export type RateLimitWindow = {

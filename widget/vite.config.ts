@@ -28,6 +28,20 @@ export default defineConfig({
       sourcemap: false,
     }),
   ],
+  // Dev-only: proxy /api/* to the Next.js dev server so streamMessage
+  // (widget/src/api.ts) can issue relative fetches against the real
+  // POST /api/widget/messages route while the dev shell runs at :5173.
+  // Phase 6e will formalize the production base-URL story — likely a
+  // data-api-base attribute on the embed script — so the widget bundle
+  // can be served from any origin and call back to ours.
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
+    },
+  },
   build: {
     lib: {
       entry: "src/main.ts",

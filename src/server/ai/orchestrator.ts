@@ -222,22 +222,40 @@ export type BrainStreamEvent = BrainStreamDelta | BrainStreamDone;
  * `delta` events (text fragments, in order) followed by exactly one
  * `done` event carrying the complete BrainResult.
  *
- * Phase 6c shape: a thin wrapper around runBrain that emits the full
- * reply as a single `delta` then `done`. The route handler streams those
- * to the widget exactly the same way it will stream real Anthropic
- * deltas, so wiring is end-to-end correct from day one.
+ * Current implementation: runBrain runs to completion (one round-trip),
+ * then the reply is sliced into ~8-codepoint chunks emitted ~35ms apart.
+ * This matches widget/src/api.ts's mockBrainStream cadence so the demo
+ * feels paced.
  *
- * Phase 6d (next commit) will replace this body with codepoint-chunked
- * streaming that mirrors widget/src/api.ts's mockBrainStream cadence
- * (~8 codepoints per chunk, ~35ms apart). Real Anthropic SSE streaming
- * lands when the API key arrives (CLAUDE.md §7a resumption checklist
- * step 3) — at which point streamReply replaces the runBrain call here
- * and yields native deltas. Wire shape stays unchanged.
+ * Codepoints, not bytes — `[...text]` yields proper Unicode codepoints
+ * so multi-byte sequences (Arabic, Darija Arabic-script, emoji) never
+ * get split mid-character. Slicing the resulting array and `.join("")`-
+ * ing back is safe.
+ *
+ * Post-credits (CLAUDE.md §7a resumption checklist step 3): the
+ * RealClaudeClient's streamReply will replace the runBrain-then-chunk
+ * pattern with native Anthropic SSE streaming at upstream speed. The
+ * route handler is unchanged — same yield shape, same delta/done
+ * contract — only the body of this function swaps.
  */
+const STREAM_CHUNK_CODEPOINTS = 8;
+const STREAM_INTER_CHUNK_DELAY_MS = 35;
+
 export async function* runBrainStream(
   input: BrainInput,
 ): AsyncGenerator<BrainStreamEvent> {
   const result = await runBrain(input);
-  yield { type: "delta", text: result.reply };
+  const codepoints = [...result.reply];
+  for (let i = 0; i < codepoints.length; i += STREAM_CHUNK_CODEPOINTS) {
+    const chunk = codepoints
+      .slice(i, i + STREAM_CHUNK_CODEPOINTS)
+      .join("");
+    yield { type: "delta", text: chunk };
+    if (i + STREAM_CHUNK_CODEPOINTS < codepoints.length) {
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, STREAM_INTER_CHUNK_DELAY_MS),
+      );
+    }
+  }
   yield { type: "done", result };
 }

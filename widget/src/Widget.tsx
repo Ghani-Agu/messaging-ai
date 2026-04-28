@@ -1,7 +1,7 @@
 import { h, Fragment } from "preact";
 import { useEffect, useReducer, useRef } from "preact/hooks";
 import { subscribe } from "./api-bus";
-import { streamMessage } from "./api";
+import { streamMessage, WidgetStreamError, type WidgetStreamErrorKind } from "./api";
 import { Launcher } from "./components/Launcher";
 import { Panel } from "./components/Panel";
 import { DemoControls, type DemoCommand } from "./components/DemoControls";
@@ -27,6 +27,7 @@ type State = {
   messages: Message[];
   draft: string;
   conversationId: string | null;
+  errorKind: WidgetStreamErrorKind | null;
 };
 
 type Action =
@@ -38,7 +39,7 @@ type Action =
   | { type: "ai/start" }
   | { type: "ai/delta"; text: string }
   | { type: "ai/done"; final: Message; conversationId: string }
-  | { type: "ai/error" }
+  | { type: "ai/error"; kind: WidgetStreamErrorKind }
   | { type: "demo/seed"; messages: Message[]; status?: ConversationState };
 
 const INITIAL: State = {
@@ -47,6 +48,7 @@ const INITIAL: State = {
   messages: [],
   draft: "",
   conversationId: null,
+  errorKind: null,
 };
 
 function reducer(s: State, a: Action): State {
@@ -59,7 +61,7 @@ function reducer(s: State, a: Action): State {
       const text = s.draft.trim();
       if (!text) return s;
       const user: Message = { id: rid(), role: "customer", text };
-      return { ...s, draft: "", status: "sending", messages: [...s.messages, user] };
+      return { ...s, draft: "", status: "sending", errorKind: null, messages: [...s.messages, user] };
     }
     case "ai/start":
       return {
@@ -81,7 +83,7 @@ function reducer(s: State, a: Action): State {
         messages: [...s.messages.slice(0, -1), a.final],
       };
     case "ai/error":
-      return { ...s, status: "error" };
+      return { ...s, status: "error", errorKind: a.kind };
     case "demo/seed":
       return { ...s, messages: a.messages, status: a.status ?? s.status };
   }
@@ -139,6 +141,7 @@ export function Widget({ widgetKey, tenantName }: { widgetKey: string | null; te
         <Panel
           tenantName={tenantName}
           status={state.status}
+          errorKind={state.errorKind}
           messages={state.messages}
           draft={state.draft}
           onClose={() => dispatch({ type: "close" })}
@@ -203,7 +206,9 @@ function runStream(args: {
     } catch (err) {
       if (cancelled) return;
       console.error("[messaging-ai widget] stream error:", err);
-      args.dispatch({ type: "ai/error" });
+      const kind: WidgetStreamErrorKind =
+        err instanceof WidgetStreamError ? err.kind : "connection_lost";
+      args.dispatch({ type: "ai/error", kind });
     }
   })();
   return () => {

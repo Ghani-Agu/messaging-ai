@@ -1,61 +1,134 @@
 import type { StreamEvent, StreamRequest } from "./types";
-import { CANNED_REPLIES, pickCannedShape } from "./mock-data";
 
 /**
  * Stream a customer message through the widget API.
  *
- * Locked wire shape (Phase-5 commit 3):
+ * Wire shape locked at Phase-5 commit c5b3e8b (types.ts):
  *   POST /api/widget/messages
- *   body:     StreamRequest (see types.ts)
+ *   request:  StreamRequest
  *   response: text/event-stream-shaped chunks over a regular HTTP response
  *   events:   { type: "delta", text } | { type: "done", ...payload }
  *
- * Currently a four-shape mock — pattern-matches the customer's message
- * (mirroring the Phase-4 StubClaudeClient branches) and streams back the
- * matching canned shape. Real fetch + ReadableStream parser at
- * integration (commit 6); the streamMessage() signature does not change.
+ * Phase-6 commit (real fetch): the in-process mockBrainStream is gone
+ * for this code path; streamMessage now hits the real route handler at
+ * /api/widget/messages and parses its SSE-shaped response stream.
+ *
+ * The mock + DemoControls remain in mock-data.ts for offline tooling
+ * and DEV-gated UI testing.
  */
-export async function* streamMessage(
-  req: StreamRequest,
-): AsyncGenerator<StreamEvent> {
-  const shape = pickCannedShape(req.message);
-  const canned = CANNED_REPLIES[shape];
-  const reply = canned.reply;
 
-  // Initial think-time so the typing indicator gets a chance to render.
-  await sleep(450);
+export type WidgetStreamErrorKind = "channel_paused" | "connection_lost";
 
-  // Stream the reply ~8 chars per chunk. Chunk boundaries are codepoint-
-  // safe because we slice the array we get from `[...reply]` rather than
-  // the raw string — important for Arabic / Darija scripts.
-  const codepoints = [...reply];
-  const chunkSize = 8;
-  for (let i = 0; i < codepoints.length; i += chunkSize) {
-    yield { type: "delta", text: codepoints.slice(i, i + chunkSize).join("") };
-    await sleep(35);
+/**
+ * Typed error thrown by streamMessage when the request fails or the
+ * stream ends prematurely. The widget switches on `kind` to render the
+ * right banner ("Support is currently offline" vs "Connection lost").
+ */
+export class WidgetStreamError extends Error {
+  readonly kind: WidgetStreamErrorKind;
+  readonly retryAfterSec: number | null;
+  constructor(kind: WidgetStreamErrorKind, message: string, retryAfterSec: number | null = null) {
+    super(message);
+    this.name = "WidgetStreamError";
+    this.kind = kind;
+    this.retryAfterSec = retryAfterSec;
   }
-
-  yield {
-    type: "done",
-    conversationId: deriveMockConversationId(req),
-    reply,
-    language: canned.language,
-    citations: canned.citations,
-    computedConfidence: canned.computedConfidence,
-    escalation: canned.escalation,
-  };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Stable across consecutive sends in a single browser session so the
- * 24h conversation-resume path is exercisable in the demo. Real server
- * uses Conversation.id (uuid).
+ * Request URL — relative path so the widget works on whatever origin
+ * embeds it. The dev shell (vite at :5173) proxies /api/* to the
+ * Next.js dev server (vite.config.ts).
  */
-function deriveMockConversationId(req: StreamRequest): string {
-  if (req.conversationId) return req.conversationId;
-  return `mock-conv-${req.customerExternalId.slice(0, 8)}`;
+const WIDGET_MESSAGES_URL = "/api/widget/messages";
+
+export async function* streamMessage(
+  req: StreamRequest,
+): AsyncGenerator<StreamEvent> {
+  let response: Response;
+  try {
+    response = await fetch(WIDGET_MESSAGES_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        widgetKey: req.widgetKey,
+        conversationId: req.conversationId ?? null,
+        message: req.message,
+        customerExternalId: req.customerExternalId,
+      }),
+    });
+  } catch (err) {
+    throw new WidgetStreamError(
+      "connection_lost",
+      `network error: ${(err as Error).message}`,
+    );
+  }
+
+  if (!response.ok) {
+    let body: { error?: string; retryAfterSec?: number } = {};
+    try {
+      body = (await response.json()) as typeof body;
+    } catch {
+      // ignore; body parse failure is itself a connection-lost signal
+    }
+    if (response.status === 503 && body.error === "channel_paused") {
+      throw new WidgetStreamError(
+        "channel_paused",
+        "Support is currently offline",
+        body.retryAfterSec ?? null,
+      );
+    }
+    throw new WidgetStreamError(
+      "connection_lost",
+      `http ${response.status}: ${body.error ?? "unknown"}`,
+    );
+  }
+
+  if (!response.body) {
+    throw new WidgetStreamError("connection_lost", "empty response body");
+  }
+
+  // Parse text/event-stream-shaped frames: each event is "data: <JSON>\n\n".
+  // The route handler emits one `data: ...` line per event with a trailing
+  // double newline; we accumulate bytes and pull complete frames as they
+  // arrive. Reaching end-of-stream without a `done` event = treated as
+  // connection_lost (the route closes the stream without `done` on
+  // mid-stream errors).
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let sawDone = false;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
+        if (!dataLine) continue;
+        const json = dataLine.slice("data: ".length);
+        let event: StreamEvent;
+        try {
+          event = JSON.parse(json) as StreamEvent;
+        } catch {
+          continue; // malformed frame; skip
+        }
+        if (event.type === "done") sawDone = true;
+        yield event;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!sawDone) {
+    throw new WidgetStreamError(
+      "connection_lost",
+      "stream ended without `done` event",
+    );
+  }
 }

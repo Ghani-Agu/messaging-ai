@@ -1,11 +1,18 @@
 import { h } from "preact";
 import type { ConversationState, Message } from "../types";
+import type { WidgetStreamErrorKind } from "../api";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
+
+const ERROR_BANNER_COPY: Record<WidgetStreamErrorKind, string> = {
+  channel_paused: "Support is currently offline — please try again shortly",
+  connection_lost: "Connection lost — please try again",
+};
 
 export function Panel({
   tenantName,
   status,
+  errorKind,
   messages,
   draft,
   onClose,
@@ -14,6 +21,7 @@ export function Panel({
 }: {
   tenantName: string;
   status: ConversationState;
+  errorKind: WidgetStreamErrorKind | null;
   messages: Message[];
   draft: string;
   onClose: () => void;
@@ -38,7 +46,7 @@ export function Panel({
       </header>
       {status === "error" ? (
         <div class="error-banner" role="alert">
-          Connection lost — please try again
+          {ERROR_BANNER_COPY[errorKind ?? "connection_lost"]}
         </div>
       ) : null}
       <MessageList messages={messages} status={status} />
