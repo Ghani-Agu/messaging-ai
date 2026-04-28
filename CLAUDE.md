@@ -169,6 +169,39 @@ Recorded in MASTER_PLAN §5. Summary:
 
 ---
 
+## 7a. Phase 4 split — partial build
+
+**Status:** Phase 4 was executed only partially. Anthropic credits unavailable at the time (project lead in Algeria — phone verification path unsupported, no path to free credits). Project lead's decision: ship the pure-logic pieces that don't need an API key, defer the rest until credits arrive (likely after first paying client), then move on to Phase 5.
+
+### Done in Phase 4 partial
+
+- **Voice profile schema** (`src/lib/validators.ts`): Zod-validated `VoiceProfile` inside `Tenant.settings.voiceProfile`. Defaults applied on tenant creation; `prisma/seed.ts` retrofits any tenant whose settings is missing the field.
+- **System-prompt builders** (`src/server/ai/prompts/system.ts`): Block A (platform rules, 594 tokens, vitest-asserted ≤ 800), Block B (per-tenant identity + voice + few-shot), Block C (runtime: citations + history + new message). `buildPrompt()` returns the multi-block array shape so Anthropic prompt caching (`cache_control: ephemeral`) is a one-line annotation later.
+- **Confidence formula** (`src/server/ai/confidence.ts`): deterministic post-tool-call computation — weights confirmed by project lead. `decideEscalation()` overrides Claude's choice with `LOW_CONFIDENCE` below the 0.6 threshold; original reason preserved in `Message.aiMetadata`.
+- **ClaudeClient interface** (`src/server/ai/claude-client.ts`): `ClaudeClient` interface, `SEND_REPLY_TOOL` JSON Schema, `StubClaudeClient` (deterministic canned shapes — happy path / OUTSIDE_SCOPE / EXPLICIT_REQUEST / PAYMENT_DISPUTE), `getClaudeClient()` factory. **The boundary the resumption swap touches.**
+- **Orchestrator** (`src/server/ai/orchestrator.ts`): full `runBrain()` pipeline — load tenant → retrieve → build prompts → input-budget guard → `client.sendReply()` → compute confidence → decide escalation → shape `BrainResult`. End-to-end tested against the stub.
+- **Vitest** alias `@/*` → `./src/*` wired so source files using the alias load identically under tests and Next.js.
+
+### Deferred — needs Anthropic credits
+
+The full original Phase 4 build order is in this conversation's context. Renumbered for resumption:
+
+1. **Real `src/server/ai/claude.ts`.** Implement `class RealClaudeClient implements ClaudeClient` using native `fetch` + `AbortSignal.timeout` per CLAUDE.md §6. **First sub-task:** run `scripts/list-anthropic-models.ts` (already shipped — read-only, awaiting key) and have the project lead pick the dated Sonnet 4.6 snapshot. Pin as `ANTHROPIC_MODEL_DEFAULT` const, env-overridable via `ANTHROPIC_MODEL`. Implement `sendReply` first; `streamReply` follows in step 3.
+2. **`scripts/brain-eval.ts` + `npm run brain:eval`.** 8-row query bank (AR / FR / EN / Darija-Arabizi / Darija-Arabic-script / FR↔Darija code-switch / off-topic / refund-anger). Validate **reply text** language with a langid library (e.g. `franc`), **not** Claude's self-reported `send_reply.language` — the self-report is a null check on Claude's introspection; we want to catch "Claude says Darija, actually replied MSA" regressions. For Darija specifically, accept either Arabic-script-with-Algerian-vocab OR Arabizi (Latin + numeral-stand-ins for ع/ح/ق); document the heuristic inline. Run after every prompt change. **Gate: must pass before step 3.**
+3. **Streaming API route** — `src/app/api/playground/stream/route.ts`. `ReadableStream` of SSE-style events (`delta` for text deltas, `done` for the structured `send_reply` args + computed confidence + citations). The streaming variant on `ClaudeClient` (`streamReply`) gets implemented on the real wrapper at this point.
+4. **Playground UI** — `src/app/(app)/[tenantSlug]/playground/page.tsx`. Chat surface, breathing-cursor stream, sidebar (detected-language badge, citations with chunk previews, groundedness, computed confidence, escalation pill with reason). All design tokens — no hard-coded values.
+5. **Sidebar voice-profile preset switcher** (read-only persistence this phase). The Phase-4 demo lets you A/B tone live without writing back to the DB. Persisted edit UI lives in Phase 9 (onboarding wizard).
+
+Acceptance for full Phase 4 (when resuming): open playground, type each of the 8 query-bank rows, watch streaming, see the matching script in Darija replies, see chunks light up in the sidebar, see groundedness/confidence/escalation update per turn.
+
+### Architectural rules established in Phase 4 partial
+
+- **Tool-use is the contract for AI replies.** The brain must always go through the `send_reply` tool — never free text. Every conformant `ClaudeClient` implementation enforces this on the way out.
+- **The orchestrator owns confidence.** Claude reports `groundedness` (self-rated support); confidence is a deterministic combination of that with verifiable retrieval signals. Never trust the model to score itself; always compute server-side.
+- **No LLM call outside `src/server/ai/`** (already in CLAUDE.md §3, reinforced here). The orchestrator + ClaudeClient interface is the *only* path.
+
+---
+
 ## 8. Memory
 
 The user maintains a Claude Code memory store at `~/.claude/projects/.../memory/`. Relevant facts about the user's working preferences, the project, and recurring rules live there and are loaded automatically. Update memory when you learn something durable; do not duplicate facts that already exist in MASTER_PLAN or this file.
