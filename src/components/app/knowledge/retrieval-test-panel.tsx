@@ -127,6 +127,9 @@ export function RetrievalTestPanel({ slug }: { slug: string }) {
                       <span className="rounded bg-[var(--accent-base)]/15 px-1.5 py-0.5 text-[var(--accent-hover)]">
                         rrf {h.rrfScore.toFixed(4)}
                       </span>
+                      <span className="rounded bg-[var(--bg-surface)] px-1.5 py-0.5 text-[var(--text-tertiary)]">
+                        {h.embedProvider}
+                      </span>
                     </div>
                   </div>
                   {meta.url ? (

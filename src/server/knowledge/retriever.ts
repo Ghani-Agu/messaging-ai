@@ -1,6 +1,6 @@
 import "server-only";
 import type { Prisma, SourceType } from "@prisma/client";
-import { embed } from "@/server/ai/embeddings";
+import { embed, type EmbedProvider } from "@/server/ai/embeddings";
 import {
   lexicalSearch,
   vectorSearch,
@@ -36,6 +36,7 @@ export type RetrievedChunk = {
   lexicalScore: number | null;
   lexicalRank: number | null;
   rrfScore: number;
+  embedProvider: EmbedProvider;
 };
 
 export async function retrieve(args: {
@@ -66,13 +67,19 @@ export async function retrieve(args: {
     }),
   ]);
 
-  return fuse({ vectorHits, lexicalHits, topK });
+  return fuse({
+    vectorHits,
+    lexicalHits,
+    topK,
+    embedProvider: queryEmbedding.provider,
+  });
 }
 
 function fuse(args: {
   vectorHits: RawSearchHit[];
   lexicalHits: RawSearchHit[];
   topK: number;
+  embedProvider: EmbedProvider;
 }): RetrievedChunk[] {
   const byId = new Map<string, RetrievedChunk>();
 
@@ -91,6 +98,7 @@ function fuse(args: {
         lexicalScore: null,
         lexicalRank: null,
         rrfScore: 0,
+        embedProvider: args.embedProvider,
       };
       byId.set(h.chunkId, existing);
     }
