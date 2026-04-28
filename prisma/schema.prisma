@@ -18,7 +18,7 @@ datasource db {
   // pre-installed by Supabase across two dedicated schemas: the standard
   // utilities live in `extensions`, and `supabase_vault` lives in `vault`.
   // Schema annotations match the actual DB layout so drift detection passes.
-  extensions = [pg_stat_statements(schema: "extensions"), pgcrypto(schema: "extensions"), supabase_vault(schema: "vault"), uuid_ossp(map: "uuid-ossp", schema: "extensions"), vector]
+  extensions = [pg_stat_statements(schema: "extensions"), pgcrypto(schema: "extensions"), plpgsql, supabase_vault(schema: "vault"), uuid_ossp(map: "uuid-ossp", schema: "extensions"), vector]
 }
 
 // =====================================================================
@@ -39,6 +39,19 @@ enum Plan {
   BUSINESS
 }
 
+enum SourceType {
+  WEBSITE
+  FILE
+  MANUAL
+}
+
+enum SourceStatus {
+  PENDING
+  PROCESSING
+  READY
+  ERROR
+}
+
 model Tenant {
   id               String       @id @default(cuid())
   slug             String       @unique
@@ -51,8 +64,10 @@ model Tenant {
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
-  members         TenantUser[]
-  lastUsedByUsers User[]       @relation("UserLastTenant")
+  members          TenantUser[]
+  lastUsedByUsers  User[]            @relation("UserLastTenant")
+  knowledgeSources KnowledgeSource[]
+  knowledgeChunks  KnowledgeChunk[]
 
   @@index([slug])
 }
@@ -138,4 +153,85 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// =====================================================================
+// Knowledge (Phase 3)
+// =====================================================================
+//
+// KnowledgeSource is the unit a tenant manages in the UI: a website crawl,
+// a parsed file, or a manual entry. KnowledgeChunk holds the embedded text
+// that retrieval queries.
+//
+// Two columns are declared as Unsupported because Prisma's PSL can't model
+// them: `embedding` (pgvector vector(1024)) and `searchVector` (Postgres
+// tsvector, populated as a GENERATED column). Both are read/written via raw
+// SQL in src/server/db/knowledge.ts. Prisma still tracks them for drift
+// detection so prisma migrate dev stays happy.
+//
+// Indexes (HNSW on embedding, GIN on searchVector) and the GENERATED clause
+// on searchVector are added via raw SQL appended to the init migration.
+
+model KnowledgeSource {
+  id             String       @id @default(cuid())
+  tenantId       String
+  type           SourceType
+  // Display name: hostname for WEBSITE, filename for FILE, user-supplied for MANUAL.
+  name           String
+  // Root URL for WEBSITE; storage path for FILE; null for MANUAL.
+  sourceUrl      String?
+  status         SourceStatus @default(PENDING)
+  // Last error message captured when status=ERROR. Cleared on re-ingest.
+  error          String?
+  // Live progress from the worker — shape:
+  //   { totalPages?: int, pagesCrawled?: int, totalChunks?: int, chunksEmbedded?: int }
+  // The polling UI reads this to drive the progress bar.
+  progress       Json         @default("{}")
+  // Per-type extras. Includes:
+  //   - log: bounded array (last 50) of { ts, level, text } — source-detail timeline
+  //   - rawContent: original text for MANUAL sources, used by reingestSource
+  //   - softCapReached: bool, set when MAX_CHUNKS_PER_TENANT was crossed during ingest
+  //   - mime: file MIME for FILE sources
+  metadata       Json         @default("{}")
+  lastIngestedAt DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  tenant Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  chunks KnowledgeChunk[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+model KnowledgeChunk {
+  id           String                       @id @default(cuid())
+  sourceId     String
+  tenantId     String
+  content      String
+  // Voyage-3-large primary, OpenAI text-embedding-3-small fallback — both at 1024 dims.
+  // Null until the embed-worker has attached a vector. Indexed via HNSW (raw SQL).
+  embedding    Unsupported("vector(1024)")?
+  // Postgres-generated column: to_tsvector('simple', content). 'simple' config (no
+  // stemming, no stopwords) is required because we mix AR/FR/EN/Darija. Indexed via GIN.
+  // Prisma never writes this column — the GENERATED ALWAYS clause makes it Postgres-managed.
+  searchVector Unsupported("tsvector")?    @default(dbgenerated("to_tsvector('simple'::regconfig, content)"))
+  tokenCount   Int
+  // Per-chunk: { url?: string, headingPath: string[], position: number, sourceType: SourceType }
+  metadata     Json                         @default("{}")
+  createdAt    DateTime                     @default(now())
+
+  source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([sourceId])
+  // The pgvector HNSW index on `embedding` cannot be expressed in PSL today
+  // (Prisma 6.1 only knows BTree/Hash/Gist/Gin/SpGist/Brin). It exists in the
+  // database (created via raw SQL in 20260427235200_add_knowledge_models) and
+  // is queried with SET LOCAL hnsw.ef_search in src/server/knowledge/retriever.ts.
+  // `prisma migrate diff` will report this index as schema-side missing — that
+  // gap is intentional; do not "fix" it by adding a non-HNSW @@index.
+  // Lexical full-text index is supported and declared:
+  @@index([searchVector], type: Gin, map: "KnowledgeChunk_searchVector_gin")
 }

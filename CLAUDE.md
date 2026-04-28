@@ -97,7 +97,7 @@ Username on both is `postgres.<project_ref>` (the form with the dot). Password i
 
 ### Supabase: pre-installed extensions cause Prisma drift
 
-Supabase pre-installs five extensions across three schemas: `pg_stat_statements`, `pgcrypto`, `uuid-ossp` in `extensions`; `supabase_vault` in `vault`; `vector` (pgvector) in `public`. If `prisma/schema.prisma` doesn't declare them with the right schema annotations, `prisma migrate dev` reports drift and wants to reset the public schema.
+Supabase pre-installs six extensions across three schemas: `pg_stat_statements`, `pgcrypto`, `uuid-ossp` in `extensions`; `supabase_vault` in `vault`; `vector` (pgvector) and `plpgsql` in `public` / `pg_catalog`. If `prisma/schema.prisma` doesn't declare them with the right schema annotations, `prisma migrate dev` reports drift and wants to reset the public schema.
 
 What works:
 
@@ -105,6 +105,7 @@ What works:
 extensions = [
   pg_stat_statements(schema: "extensions"),
   pgcrypto(schema: "extensions"),
+  plpgsql,
   supabase_vault(schema: "vault"),
   uuid_ossp(map: "uuid-ossp", schema: "extensions"),
   vector
@@ -120,6 +121,30 @@ Plus: the init migration's SQL must `CREATE SCHEMA IF NOT EXISTS "extensions"` a
 ### Prisma + .env.local
 
 Prisma's CLI only reads `.env`, not Next.js's `.env.local`. All `db:*` npm scripts wrap with `dotenv -e .env.local --` so they pick up the right URLs. Don't run bare `prisma migrate dev` — use `npm run db:migrate` instead.
+
+### Prisma can't express pgvector HNSW indexes
+
+Prisma 6.1's `@@index(type: ...)` accepts only `BTree | Hash | Gist | Gin | SpGist | Brin`. There is no `Hnsw`. Our HNSW index on `KnowledgeChunk.embedding` is created via raw SQL inside `20260427235200_add_knowledge_models/migration.sql` and is invisible to PSL. `prisma migrate diff` will permanently report:
+
+```
+[*] Changed the `KnowledgeChunk` table
+  [+] Added index on columns (embedding)
+```
+
+That gap is intentional — do **not** "fix" it by adding a non-HNSW `@@index([embedding])` (Prisma would then try to drop our HNSW index and create a useless BTree one). When generating future migrations, always use `npm run db:migrate -- --create-only --name <name>`, and **delete any `DROP INDEX "KnowledgeChunk_embedding_hnsw"` line** Prisma slips into the generated SQL before applying. Our `scripts/verify-knowledge-schema.mjs` confirms the index is still present after each migration.
+
+The same script checks the GENERATED `searchVector` column — also added via raw SQL since Prisma's `@default(dbgenerated(...))` doesn't actually emit `GENERATED ALWAYS AS ... STORED`. Run it whenever the Knowledge schema changes.
+
+### Phase 3: knowledge migration workflow
+
+For any change touching `KnowledgeChunk` / `KnowledgeSource`:
+
+1. Edit `prisma/schema.prisma`.
+2. `npm run db:migrate -- --create-only --name <descriptive-name>`.
+3. Open the generated `migration.sql`. Strip any `DROP INDEX "KnowledgeChunk_embedding_hnsw"` and any `ALTER COLUMN "searchVector"` Prisma slips in (both come from PSL/DB drift, not your edit).
+4. Add custom raw SQL for any new HNSW / GENERATED column work.
+5. `npm run db:migrate` to apply.
+6. `npx dotenv -e .env.local -- node scripts/verify-knowledge-schema.mjs` to confirm.
 
 When this section grows large, group by tool.
 
