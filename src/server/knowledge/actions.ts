@@ -11,7 +11,9 @@ import {
   deleteSource as deleteSourceDb,
   getSource,
   insertChunksWithoutEmbeddings,
+  listSourcesForTenant,
   maybeMarkSourceReady,
+  type SourceSummary,
   updateSourceStatus,
 } from "@/server/db/knowledge";
 import { embed } from "@/server/ai/embeddings";
@@ -323,6 +325,15 @@ export async function reingestSource(
     tenantId: ctx.tenant.id,
     content: rawContent,
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Listing — used by the polling UI on the Knowledge page
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function listSources(slug: string): Promise<SourceSummary[]> {
+  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  return listSourcesForTenant(ctx.tenant.id);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

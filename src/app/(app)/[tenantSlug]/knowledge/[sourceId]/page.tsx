@@ -1,0 +1,35 @@
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { getTenantContext } from "@/server/tenancy/context";
+import {
+  getSource,
+  listChunksForSource,
+} from "@/server/db/knowledge";
+import { SourceDetailClient } from "@/components/app/knowledge/source-detail-client";
+
+export const metadata: Metadata = {
+  title: "Source",
+};
+
+export default async function SourceDetailPage({
+  params,
+}: {
+  params: Promise<{ tenantSlug: string; sourceId: string }>;
+}) {
+  const { tenantSlug, sourceId } = await params;
+  const ctx = await getTenantContext(tenantSlug);
+  const source = await getSource({ tenantId: ctx.tenant.id, sourceId });
+  if (!source) notFound();
+  const chunks = await listChunksForSource({
+    tenantId: ctx.tenant.id,
+    sourceId,
+    limit: 100,
+  });
+  return (
+    <SourceDetailClient
+      slug={tenantSlug}
+      source={source}
+      chunks={chunks}
+    />
+  );
+}
