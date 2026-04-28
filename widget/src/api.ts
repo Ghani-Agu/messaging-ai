@@ -1,4 +1,5 @@
 import type { StreamEvent, StreamRequest } from "./types";
+import { CANNED_REPLIES, pickCannedShape } from "./mock-data";
 
 /**
  * Stream a customer message through the widget API.
@@ -9,36 +10,52 @@ import type { StreamEvent, StreamRequest } from "./types";
  *   response: text/event-stream-shaped chunks over a regular HTTP response
  *   events:   { type: "delta", text } | { type: "done", ...payload }
  *
- * Currently a minimal mock — emits a tiny canned reply so the component
- * tree compiles and the stream wiring is exercised end-to-end. Commit 4
- * replaces this with the four-shape mock that mirrors the Phase-4 stub
- * (happy / OUTSIDE_SCOPE / EXPLICIT_REQUEST / PAYMENT_DISPUTE) plus the
- * Darija RTL fixtures. Real fetch + ReadableStream parser at integration
- * (commit 6); the signature will not change.
+ * Currently a four-shape mock — pattern-matches the customer's message
+ * (mirroring the Phase-4 StubClaudeClient branches) and streams back the
+ * matching canned shape. Real fetch + ReadableStream parser at
+ * integration (commit 6); the streamMessage() signature does not change.
  */
 export async function* streamMessage(
-  _req: StreamRequest,
+  req: StreamRequest,
 ): AsyncGenerator<StreamEvent> {
-  // Tiny commit-3 placeholder reply.
-  const reply = "Thanks for the message — the real backend lands at integration.";
-  const chunkSize = 8;
+  const shape = pickCannedShape(req.message);
+  const canned = CANNED_REPLIES[shape];
+  const reply = canned.reply;
 
-  await sleep(300);
-  for (let i = 0; i < reply.length; i += chunkSize) {
-    yield { type: "delta", text: reply.slice(i, i + chunkSize) };
-    await sleep(40);
+  // Initial think-time so the typing indicator gets a chance to render.
+  await sleep(450);
+
+  // Stream the reply ~8 chars per chunk. Chunk boundaries are codepoint-
+  // safe because we slice the array we get from `[...reply]` rather than
+  // the raw string — important for Arabic / Darija scripts.
+  const codepoints = [...reply];
+  const chunkSize = 8;
+  for (let i = 0; i < codepoints.length; i += chunkSize) {
+    yield { type: "delta", text: codepoints.slice(i, i + chunkSize).join("") };
+    await sleep(35);
   }
+
   yield {
     type: "done",
-    conversationId: "mock-conversation-id",
+    conversationId: deriveMockConversationId(req),
     reply,
-    language: "en",
-    citations: [],
-    computedConfidence: 0.0,
-    escalation: "OUTSIDE_SCOPE",
+    language: canned.language,
+    citations: canned.citations,
+    computedConfidence: canned.computedConfidence,
+    escalation: canned.escalation,
   };
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Stable across consecutive sends in a single browser session so the
+ * 24h conversation-resume path is exercisable in the demo. Real server
+ * uses Conversation.id (uuid).
+ */
+function deriveMockConversationId(req: StreamRequest): string {
+  if (req.conversationId) return req.conversationId;
+  return `mock-conv-${req.customerExternalId.slice(0, 8)}`;
 }

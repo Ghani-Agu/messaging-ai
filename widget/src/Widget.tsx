@@ -4,6 +4,7 @@ import { subscribe } from "./api-bus";
 import { streamMessage } from "./api";
 import { Launcher } from "./components/Launcher";
 import { Panel } from "./components/Panel";
+import { DemoControls, type DemoCommand } from "./components/DemoControls";
 import { CONVERSATION_RESUME_MAX_AGE_MS } from "./limits";
 import type { ConversationState, Message, StreamEvent } from "./types";
 
@@ -120,6 +121,16 @@ export function Widget({ widgetKey, tenantName }: { widgetKey: string | null; te
     return cancel;
   }, [state.status]);
 
+  const handleDemoCommand = (cmd: DemoCommand) => {
+    if (cmd.kind === "seed") {
+      dispatch({ type: "demo/seed", messages: cmd.messages, status: cmd.status });
+    } else {
+      // status flip — synthesize via demo/seed so we don't need a new
+      // reducer action for what's already a fake state machine input.
+      dispatch({ type: "demo/seed", messages: state.messages, status: cmd.status });
+    }
+  };
+
   return (
     <Fragment>
       {!state.open ? (
@@ -135,6 +146,7 @@ export function Widget({ widgetKey, tenantName }: { widgetKey: string | null; te
           onSend={() => dispatch({ type: "send" })}
         />
       )}
+      {import.meta.env.DEV ? <DemoControls onCommand={handleDemoCommand} /> : null}
     </Fragment>
   );
 }
