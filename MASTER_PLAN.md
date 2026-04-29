@@ -491,11 +491,12 @@ Each phase ends with a working, demoable milestone. Each phase corresponds to on
 
 **Acceptance:** Real WhatsApp number sends a message → arrives in dashboard → AI replies → reply lands in WhatsApp.
 
-### Phase 7 — Channel: Instagram (Days 18–19)
+<!-- Phase 7 deviation: scope expanded from "Instagram only" to "Messenger + Instagram via the Meta Graph API" — project-lead-approved at Phase 7 Gate 1. The two channels share a single Meta App, a single Page Access Token per Page, a single `META_APP_SECRET` for HMAC, and a single webhook endpoint (`/api/meta/webhook`); splitting them into separate phases would have duplicated the entire Graph adapter + connect form. Aligns with §14's anticipation of "Messenger (v1.1): same Meta App as Instagram, just additional permissions" — pulled in to v1 because the marginal cost of including Messenger alongside Instagram was minimal once the Meta integration was being built. -->
+### Phase 7 — Channel: Messenger + Instagram via Meta Graph API (Days 18–19)
 
-**Deliverable:** Meta OAuth flow for tenant to connect their IG Business account. Webhook handles IG DMs, routes to AI brain, replies via Graph API.
+**Deliverable:** Meta App connect flow (paste Page Access Token, two-step preview→confirm) for a tenant's Facebook Page. A linked Instagram Business Account auto-appears as a second connectable surface. Webhook (`/api/meta/webhook`) handles both Messenger DMs (`object: "page"`) and Instagram DMs (`object: "instagram"`) on the same endpoint, routes to the AI brain, replies via Graph API. Outbound respects the 24-hour customer-service window (channel-agnostic per `src/server/channels/policy.ts`).
 
-**Acceptance:** DM the connected IG account → AI replies in IG.
+**Acceptance:** Connect a Page with a linked IG Business → DM the Page on Facebook → AI replies in Messenger. DM the linked IG account → AI replies in Instagram. Conversations dashboard shows both channels with proper filter pills, channel-specific header metadata (Page name for Messenger, @username for Instagram), and PSID/IGSID truncation when no profile name is on file.
 
 ### Phase 8 — Human handoff + escalation (Days 20–22)
 

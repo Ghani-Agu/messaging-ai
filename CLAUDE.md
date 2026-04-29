@@ -56,7 +56,8 @@ Workflow per phase:
 - Never hard-code colors, font sizes, spacing, or motion values — always use the design tokens (`src/app/globals.css` for CSS, `src/lib/design-tokens.ts` for JS, `src/lib/motion.ts` for animations).
 - Never expose a streaming endpoint as `GET + EventSource`. Always `POST + ReadableStream` with SSE-shaped data (`data: { ... }\n\n` framing for `delta` and `done` events). Settled twice in Phase 5: POST keeps tenant slug / auth headers / structured request body intact, and the data-events shape lets the client demux without reconnect logic.
 - Never write a concurrent upsert against a unique-keyed table without wrapping in `withP2002Retry` (`src/server/db/conversations.ts`). The race is real for any `(tenantId, channelType, externalId)` upsert under Phase 6/7 channel adapters — two simultaneous first-time messages from the same brand-new customer can both take the `!exists` branch and one gets `P2002`. Second attempt sees the committed row and goes down the update branch.
-- Never bypass security paths in stub channel adapters. Channel adapters follow the `StubXClient` / `RealXClient` / `getXClient(channel)` factory pattern (mirrors the `ClaudeClient` shape from §7a). Stubs must exercise the **full** security path — sign payloads with real HMAC against a real (stub) secret, round-trip the encrypted-credentials envelope, validate signatures the same way the real implementation will. The "always return true on signature verify in stub" pattern hides regressions until production. Real-API swap at credential time is then a single env-var change (`WHATSAPP_USE_STUB`, `WHATSAPP_360DIALOG_API_KEY`, etc.).
+- Never bypass security paths in stub channel adapters. Channel adapters follow the `StubXClient` / `RealXClient` / `getXClient(channel)` factory pattern (mirrors the `ClaudeClient` shape from §7a). Proven across three channels by Phase 7: WhatsApp via 360dialog (Phase 6), and Messenger + Instagram via the Meta Graph API (Phase 7). Stubs must exercise the **full** security path — sign payloads with real HMAC against a real (stub) secret, round-trip the encrypted-credentials envelope, validate signatures the same way the real implementation will. The "always return true on signature verify in stub" pattern hides regressions until production. Real-API swap at credential time is a single env-var change per channel family — for example `WHATSAPP_USE_STUB` / `WHATSAPP_360DIALOG_API_KEY` for WhatsApp, `META_USE_STUB` / `META_APP_ID` / `META_APP_SECRET` for both Meta channels (a single Meta App authorizes both Messenger and Instagram on a linked Page).
+- Never assume `formData.get(key) ?? undefined` is unnecessary in Server Actions feeding Zod schemas. `FormData.get()` returns `null` for absent keys, but `z.string().optional()` accepts only `undefined` or missing — `null` triggers a "Required" path error and the schema fails. Coerce with `?? undefined` at the parse site for any optional FormData field (especially checkbox-style fields where "absent → unchecked" is normal). Hit during Phase 7e Server Action wiring on the `connectInstagram?` checkbox; tests for "only Messenger selected" / "neither selected" failed with a generic schema error until the coercion landed.
 - Never `git add -A` blindly — `.claude/`, `.env.local`, and other locals can sneak in. Stage by path.
 - Never `git commit --amend` or `--no-verify` without explicit project-lead approval.
 
@@ -162,7 +163,12 @@ Two interactive surprises around `prisma migrate dev`. Both stem from the same r
 
 - `KnowledgeChunk_embedding_hnsw` — HNSW on `KnowledgeChunk.embedding` (Phase 3).
 - `Channel_widget_publicKey_unique` — partial unique on `config->>'publicKey'` where `type='WIDGET'` (Phase 6).
+- `Channel_whatsapp_phoneNumberId_unique` — partial unique on `config->>'phoneNumberId'` where `type='WHATSAPP'` (Phase 6a).
+- `Channel_messenger_pageId_unique` — partial unique on `config->>'pageId'` where `type='MESSENGER'` (Phase 7a).
+- `Channel_instagram_igUserId_unique` — partial unique on `config->>'igUserId'` where `type='INSTAGRAM'` (Phase 7a).
 - Any future raw-SQL index added the same way — when you add one, add it to this list too.
+
+In current observed behavior, only the HNSW index actually triggers a generated `DROP INDEX` line (the partial-unique-on-JSON ones are "missing in PSL but not extra in DB" from Prisma's perspective, so the diff engine doesn't try to drop them). The other entries are defensive — if Prisma's diff behavior changes or some edge case generates a drop for them, the rule covers it before destructive damage.
 
 When you strip a line, leave a one-line `-- INTENTIONAL: do not drop <index name> — managed via raw SQL` comment in its place so a future maintainer doesn't undo the strip. The verify scripts (`scripts/verify-knowledge-schema.mjs`, `scripts/verify-channels-schema.mjs`) catch missed strips after apply and should be run after every migration.
 
@@ -170,6 +176,20 @@ When you strip a line, leave a one-line `-- INTENTIONAL: do not drop <index name
 
 - `npx dotenv -e .env.local -- node scripts/release-migrate-lock.mjs` — identifies any session in `pg_locks` holding objid=72707369 and `pg_terminate_backend`s it. Fast.
 - Wait for Supavisor's idle timeout (~10 min) and retry.
+
+**Recovery: migrate-dev pre-flight applies pending on-disk migrations destructively.** Hit during Phase 7a, root cause of the corrective `20260429020000_phase7a_corrective_restore_hnsw_add_meta_indexes` migration. The full sequence that bit:
+
+1. `npm run db:migrate -- --create-only --name add_meta_routing` generated `20260429014012_add_meta_routing/migration.sql` with a spurious `DROP INDEX "KnowledgeChunk_embedding_hnsw"` line at the top.
+2. The drift prompt fired; we Ctrl+C'd it. The flawed migration file was NOT yet applied — but it was **on disk** in `prisma/migrations/`.
+3. The next `npm run db:migrate` invocation runs a pre-flight pass that **applies any pending on-disk migration before generating the next one**. The pre-flight applied the flawed migration as-is, dropping the HNSW index destructively before we ever got the chance to strip the line.
+
+**Standing rule.** After Ctrl+C-ing the drift prompt:
+
+- **Inspect `prisma/migrations/` for any newly-created directory.** If found (it usually is — `--create-only` always writes the file), strip the spurious `DROP INDEX` line per the strip list above before doing anything else.
+- **Use `npm run db:migrate:deploy` (not `migrate dev`) to apply** the corrected file. `migrate:deploy` skips the pre-flight pending-migration scan and the drift detector; it just applies what's on disk in order.
+- Only after the corrected file applies cleanly should you run `migrate dev` again for the next change.
+
+If the destructive apply already ran (HNSW index gone, vector queries returning empty results / sequential scans), the recovery is a corrective hand-rolled migration that re-creates the index — see `20260429020000_phase7a_corrective_restore_hnsw_add_meta_indexes/migration.sql` for the template. Rebuilding the HNSW index on the embedded corpus takes 1-2 minutes; not catastrophic but not zero either.
 
 ### Phase 6: widget public-key partial unique index is invisible to Prisma
 
@@ -189,14 +209,16 @@ Same workflow as Phase 3: `npm run db:migrate -- --create-only --name <name>`, e
 
 ### Webhook security checklist (Phase 6+ inbound webhooks)
 
-Standing rules for every inbound webhook handler in this codebase. Followed by the WhatsApp ingress (`src/app/api/whatsapp/webhook/route.ts`); applies verbatim to Phase 7 (Meta Graph for FB Messenger / IG) and any future channel.
+Standing rules for every inbound webhook handler in this codebase. Followed by the WhatsApp ingress (`src/app/api/whatsapp/webhook/route.ts`) and the Meta ingress (`src/app/api/meta/webhook/route.ts`).
 
 1. **`req.text()` once, before HMAC.** Read the raw body as a string exactly once and parse it via `JSON.parse` from that string. Never call `req.json()` (or any parse-then-stringify dance) before signature verification — re-stringifying produces a different byte sequence and the HMAC fails.
 2. **`crypto.timingSafeEqual` for signature comparison.** Never plain string `===` on the hash bytes. Length-check first (`timingSafeEqual` throws on length mismatch); the check is itself constant-time relative to header content.
-3. **5-minute replay window.** Each inbound message / status carries a unix-second timestamp; reject anything outside `±5 min` from `now`. Not crypto-strong (an attacker with a leaked signature can still replay within 5 min) but raises the bar against passive signature leak attacks.
-4. **404 on unknown routing key — no signature check on lookup miss.** Resolve the channel from a routing field in the payload (e.g. `phone_number_id` for WhatsApp) BEFORE signature verification; if the lookup misses, return 404 without ever computing or comparing the HMAC. Returning 401/403 leaks channel existence via response timing.
+3. **5-minute replay window.** Each inbound message / status carries a unix timestamp (seconds for WhatsApp, milliseconds for Meta); reject anything outside `±5 min` from `now`. Not crypto-strong (an attacker with a leaked signature can still replay within 5 min) but raises the bar against passive signature leak attacks.
+4. **Channel-resolution ordering depends on whether the secret is per-channel or global.** Two patterns coexist:
+   - **Per-channel-secret scheme (WhatsApp via 360dialog, Phase 6).** Each Channel row stores its own `webhookSecret` in the encrypted credentials envelope. The handler must resolve the Channel from the routing field in the payload (`phone_number_id`) BEFORE signature verification — the secret to compare against lives on the row. **Order: lookup first → 404 on miss with no HMAC computed → decrypt → HMAC verify.** 404 on lookup miss avoids leaking channel existence via response timing (a 401 would prove the routing key matched a known channel but the signature was wrong).
+   - **Global-secret scheme (Meta Graph for Messenger + Instagram, Phase 7).** `META_APP_SECRET` is an env var, identical for every Channel routed by a given Meta App. The handler **must** verify HMAC FIRST with the global secret, then resolve the Channel from the payload, then **200-ack + structured-log + drop** on unknown routing key. **Order: HMAC verify first → 401 on miss → JSON parse → channel lookup → 200+log+drop on unknown.** 200 (not 404) on lookup miss because Meta forwards events from any subscribed Page, including ones we may have disconnected; 4xx makes Meta retry indefinitely. The HMAC-first order is correct here precisely because the secret is channel-agnostic — no per-channel state to wait for. Implemented in `src/app/api/meta/webhook/route.ts` per Gate 1 H4.
 5. **Idempotency dedupe by `providerMessageId` before `recordInboundMessage`.** Webhook providers retry on 5xx (sometimes on slow 2xx too). The `Message_tenantId_providerMessageId_idx` composite from Phase 6a serves the lookup.
-6. **No bypass on stub.** The stub channel adapter signs with real HMAC against a real (stub) secret stored in the encrypted credentials envelope. The route's verification path is exercised in dev exactly as it will be in prod — see §3 "stub→real swap" rule.
+6. **No bypass on stub.** The stub channel adapter signs with real HMAC against a real (stub) secret — stored in the encrypted credentials envelope for per-channel-secret schemes, or returned by `getMetaAppSecret()`'s dev fallback for the global-secret scheme. The route's verification path is exercised in dev exactly as it will be in prod — see §3 "stub→real swap" rule.
 7. **Per-message dispatch failure ≠ batch failure.** A malformed message in a batched payload shouldn't cause the whole batch to retry — log the failure, continue. Idempotency catches dupes on retry of the WHOLE batch (which the provider will also do).
 
 ### Auth-gated test inspection: forging JWT cookies (NextAuth v5)

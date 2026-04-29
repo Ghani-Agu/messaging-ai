@@ -440,9 +440,17 @@ export async function testConnection(
   try {
     credentials = decryptMetaCredentials(channel);
   } catch (err) {
+    // User-facing copy: AGENTs hit testConnection from the config card,
+    // and a raw decryption error message ("Unsupported state or unable
+    // to authenticate data") is meaningless to them. The actionable
+    // path is to reconnect; surface that directly.
+    console.warn(
+      `meta/actions: decryptMetaCredentials failed for channel ${channel.id}:`,
+      err,
+    );
     return {
       status: "error",
-      message: err instanceof Error ? err.message : "Decryption failed.",
+      message: "Credentials missing or corrupted. Please reconnect this channel.",
     };
   }
 
@@ -510,6 +518,15 @@ export async function disconnectMessenger(
   });
 }
 
+// TODO(Phase 6.5/8): Page Access Tokens are 60-day long-lived. A tenant
+// who disconnects, waits >60 days, then reconnects without re-pasting
+// will have stale credentials in the encrypted envelope — flipping the
+// status back to CONNECTED won't refresh the token. The first outbound
+// send / inbound getProfile call will fail with HTTP 401, and the
+// dashboard will surface deliveryStatus="failed" until they reconnect
+// with a fresh token. Phase 6.5/8 will add token-refresh handling
+// (Meta's debug-token endpoint or proactive re-validation on
+// reconnect).
 export async function reconnectMessenger(
   _prev: DisconnectState,
   formData: FormData,
@@ -540,6 +557,15 @@ export async function disconnectInstagram(
   });
 }
 
+// TODO(Phase 6.5/8): Page Access Tokens are 60-day long-lived. A tenant
+// who disconnects, waits >60 days, then reconnects without re-pasting
+// will have stale credentials in the encrypted envelope — flipping the
+// status back to CONNECTED won't refresh the token. The first outbound
+// send / inbound getProfile call will fail with HTTP 401, and the
+// dashboard will surface deliveryStatus="failed" until they reconnect
+// with a fresh token. Phase 6.5/8 will add token-refresh handling
+// (Meta's debug-token endpoint or proactive re-validation on
+// reconnect).
 export async function reconnectInstagram(
   _prev: DisconnectState,
   formData: FormData,
