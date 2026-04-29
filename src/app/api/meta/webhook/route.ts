@@ -14,6 +14,7 @@ import {
   getChannelByMessengerPageId,
 } from "@/server/db/channels";
 import {
+  findCustomerByExternalId,
   findMessageByProviderId,
   loadHistoryTurns,
   markConversationForHandoff,
@@ -24,6 +25,16 @@ import {
   type MessageAiMetadata,
 } from "@/server/db/conversations";
 import { runBrain } from "@/server/ai/orchestrator";
+import { getMessengerClient } from "@/server/channels/messenger/client";
+import { getInstagramClient } from "@/server/channels/instagram/client";
+import {
+  decryptCredentials,
+  isEncryptedCredentials,
+} from "@/server/channels/credentials";
+import {
+  metaCredentialsSchema,
+  type MetaCredentials,
+} from "@/lib/validators";
 
 /**
  * POST /api/meta/webhook — single ingress for Meta Graph API webhooks.
@@ -136,6 +147,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       channelKind: "messenger",
       channelType: "MESSENGER",
       resolveChannel: getChannelByMessengerPageId,
+      fetchProfile: fetchMessengerProfile,
     });
   } else {
     await dispatchBatch({
@@ -144,6 +156,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       channelKind: "instagram",
       channelType: "INSTAGRAM",
       resolveChannel: getChannelByInstagramIgUserId,
+      fetchProfile: fetchInstagramProfile,
     });
   }
 
@@ -193,14 +206,21 @@ export function GET(req: NextRequest): Response {
 // Batch dispatch — one helper, parameterized by channel kind
 // ─────────────────────────────────────────────────────────────────────────────
 
+type ProfileFetcher = (args: {
+  channel: Channel;
+  externalId: string;
+}) => Promise<{ name: string } | null>;
+
 async function dispatchBatch(args: {
   parsed: ParsedMetaWebhook;
   now: number;
   channelKind: "messenger" | "instagram";
   channelType: ChannelType;
   resolveChannel: (id: string) => Promise<Channel | null>;
+  fetchProfile: ProfileFetcher;
 }): Promise<void> {
-  const { parsed, now, channelKind, channelType, resolveChannel } = args;
+  const { parsed, now, channelKind, channelType, resolveChannel, fetchProfile } =
+    args;
 
   // Inbound — record + run brain on TEXT.
   for (const inbound of parsed.inbound) {
@@ -222,7 +242,12 @@ async function dispatchBatch(args: {
       continue;
     }
     try {
-      await dispatchInboundMessage({ channel, channelType, inbound });
+      await dispatchInboundMessage({
+        channel,
+        channelType,
+        inbound,
+        fetchProfile,
+      });
     } catch (err) {
       // Per-message failure shouldn't tank the batch. Idempotency catches
       // dupes when Meta retries the whole batch.
@@ -261,11 +286,12 @@ async function dispatchBatch(args: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function dispatchInboundMessage(args: {
-  channel: { id: string; tenantId: string };
+  channel: Channel;
   channelType: ChannelType;
   inbound: ParsedMetaInbound;
+  fetchProfile: ProfileFetcher;
 }): Promise<void> {
-  const { channel, channelType, inbound } = args;
+  const { channel, channelType, inbound, fetchProfile } = args;
 
   // Idempotency — Meta retries on 5xx. providerMessageId catches dupes
   // before we run the brain a second time.
@@ -275,19 +301,47 @@ async function dispatchInboundMessage(args: {
   });
   if (existing) return;
 
-  // 7c skips getProfile — Meta inbound payloads don't carry profile name
-  // (unlike WhatsApp's contacts[].profile.name). The leaf clients have
-  // typed getProfile methods ready, but invoking them requires decrypted
-  // credentials and adds a 100-300ms network call per first-time
-  // customer. Wiring it lands in 7e (connect-form preview) or 7d
-  // (outbound), where credentials are guaranteed valid. For now the
-  // Customer row is created with externalId only; the dashboard renders
-  // the externalId as a placeholder name until then.
+  // Profile lookup — synchronous on first inbound from a new
+  // (tenantId, channelType, externalId), cached thereafter (Gate 1 H6).
+  //
+  // Meta inbound payloads don't carry the customer's display name (unlike
+  // WhatsApp's contacts[].profile.name); without this fetch the operator
+  // dashboard would show raw PSIDs / IGSIDs forever. We pay one Graph API
+  // call per (tenant, customer) lifetime — ~100-300ms — only on the first
+  // message from a never-seen-before identity. Subsequent messages skip
+  // the call entirely via the `existing && existing.name` short-circuit
+  // below.
+  //
+  // Failure-tolerant: profile-fetch errors are logged inside fetchProfile
+  // and surface as null. The message still lands; Customer.name stays
+  // null and the dashboard falls back to externalId. Operator can rename
+  // manually later.
+  //
+  // Phase 8/9 swap point: if perf becomes an issue at scale (large
+  // batches of new-customer messages on a hot Page), enqueue the fetch
+  // to BullMQ and let the dashboard render externalId until the result
+  // lands. Adds a few-second lag to the name on first message; trade-off
+  // worth taking only when the synchronous cost actually shows up.
+  const cachedCustomer = await findCustomerByExternalId({
+    tenantId: channel.tenantId,
+    channelType,
+    externalId: inbound.customerExternalId,
+  });
+  let customerHints: { name: string } | undefined;
+  if (!cachedCustomer || !cachedCustomer.name) {
+    const profile = await fetchProfile({
+      channel,
+      externalId: inbound.customerExternalId,
+    });
+    if (profile) customerHints = { name: profile.name };
+  }
+
   const { conversation, customer } = await resolveOrCreateConversation({
     tenantId: channel.tenantId,
     channelId: channel.id,
     channelType,
     externalId: inbound.customerExternalId,
+    customerHints,
   });
 
   const inboundMessage = await recordInboundMessage({
@@ -351,4 +405,90 @@ function jsonError(status: number, error: string): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Profile fetchers — bridge ParsedMetaInbound → leaf-typed getProfile call
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The leaves have channel-specific getProfile signatures (PSID first/last vs
+// IGSID @username/name). These fetchers project both into a unified
+// `{ name }` shape and never throw — caller treats null as "skip the
+// customerHints, dashboard falls back to externalId".
+
+async function fetchMessengerProfile(args: {
+  channel: Channel;
+  externalId: string;
+}): Promise<{ name: string } | null> {
+  try {
+    const client = getMessengerClient({
+      channel: args.channel,
+      credentials: readMetaCredentials(args.channel),
+    });
+    const profile = await client.getProfile({ psid: args.externalId });
+    if (!profile) return null;
+    const name = [profile.firstName, profile.lastName]
+      .filter((p): p is string => Boolean(p))
+      .join(" ")
+      .trim();
+    return name ? { name } : null;
+  } catch (err) {
+    console.warn(
+      `meta/webhook: messenger getProfile failed for ${args.externalId}:`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+async function fetchInstagramProfile(args: {
+  channel: Channel;
+  externalId: string;
+}): Promise<{ name: string } | null> {
+  try {
+    const client = getInstagramClient({
+      channel: args.channel,
+      credentials: readMetaCredentials(args.channel),
+    });
+    const profile = await client.getProfile({ igsid: args.externalId });
+    if (!profile) return null;
+    // Prefer @username (the primary IG identity); fall back to display name.
+    const name = profile.username ?? profile.name;
+    return name ? { name } : null;
+  } catch (err) {
+    console.warn(
+      `meta/webhook: instagram getProfile failed for ${args.externalId}:`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/**
+ * Read + decrypt a Meta channel's credentials. Returns a placeholder
+ * MetaCredentials object on missing/malformed blob — the factory may
+ * still route to a Stub client (META_APP_ID unset) which ignores the
+ * token entirely, so the dispatch path remains exercisable in dev/test
+ * before the connect form lands. In production with real env, a Real
+ * client constructed against the placeholder token would fail on the
+ * actual API call; the caller catches the error and returns null
+ * (Customer stays unnamed, dashboard falls back to externalId).
+ */
+const PLACEHOLDER_CREDENTIALS: MetaCredentials = {
+  pageAccessToken: "stub-placeholder-token",
+};
+
+function readMetaCredentials(channel: Channel): MetaCredentials {
+  if (!isEncryptedCredentials(channel.credentials)) {
+    return PLACEHOLDER_CREDENTIALS;
+  }
+  try {
+    return metaCredentialsSchema.parse(decryptCredentials(channel.credentials));
+  } catch (err) {
+    console.warn(
+      `meta/webhook: failed to decrypt credentials for channel ${channel.id}:`,
+      err instanceof Error ? err.message : err,
+    );
+    return PLACEHOLDER_CREDENTIALS;
+  }
 }

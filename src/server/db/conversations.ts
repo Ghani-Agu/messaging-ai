@@ -204,6 +204,37 @@ export function getConversation(
   });
 }
 
+/**
+ * Find a Customer by the channel-specific identity tuple. Returns the
+ * row if it exists for this tenant on this channel type, null otherwise.
+ *
+ * Used by the Meta webhook handler to decide whether to fire a
+ * synchronous getProfile call on inbound: a customer that already
+ * exists with a non-null `name` has already been resolved by a prior
+ * webhook, so we skip the API call and reuse the cached label. This
+ * keeps getProfile a one-shot per (tenant, externalId) lifetime rather
+ * than per-message.
+ *
+ * Backed by the `tenantId_channelType_externalId` composite unique
+ * (the same one used by the customer.upsert in
+ * resolveOrCreateConversation), so the lookup is index-served.
+ */
+export function findCustomerByExternalId(args: {
+  tenantId: string;
+  channelType: ChannelType;
+  externalId: string;
+}): Promise<Customer | null> {
+  return prisma.customer.findUnique({
+    where: {
+      tenantId_channelType_externalId: {
+        tenantId: args.tenantId,
+        channelType: args.channelType,
+        externalId: args.externalId,
+      },
+    },
+  });
+}
+
 export type ConversationWithMessages = Conversation & {
   channel: { id: string; type: ChannelType; displayName: string };
   customer: Customer;
