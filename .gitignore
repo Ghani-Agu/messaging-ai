@@ -60,3 +60,8 @@ docker-data/
 
 # Claude Code local settings
 .claude/
+
+# Phase 6 stub channel deliveries — local-only message log written by
+# StubWhatsAppClient (and future stub channel adapters) so dev can
+# inspect simulated outbound traffic without hitting a real provider.
+.stub-deliveries/

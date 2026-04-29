@@ -52,6 +52,9 @@ export type EncryptedCredentials = {
   ciphertext: string; // base64
 };
 
+// TODO(Phase 10+): when ENCRYPTION_KEY rotation lands,
+// _resetEncryptionKeyCacheForTests + a background re-encryption migration
+// job become the rotation primitives.
 let cachedKey: Buffer | null = null;
 
 function getKey(): Buffer {
