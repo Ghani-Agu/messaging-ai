@@ -91,6 +91,28 @@ export function getChannelByWidgetPublicKey(
   });
 }
 
+/**
+ * Resolve a WhatsApp WABA phone-number-id → Channel. Hot path: every
+ * inbound WhatsApp webhook does this once before signature verification.
+ * Backed by the Channel_whatsapp_phoneNumberId_unique partial unique
+ * index. Returns the row regardless of status; webhook handler 404s on
+ * null (no signature check on miss — avoids leaking channel existence
+ * via timing).
+ */
+export function getChannelByWhatsAppPhoneNumberId(
+  phoneNumberId: string,
+): Promise<Channel | null> {
+  if (!phoneNumberId || phoneNumberId.length === 0) {
+    return Promise.resolve(null);
+  }
+  return prisma.channel.findFirst({
+    where: {
+      type: "WHATSAPP",
+      config: { path: ["phoneNumberId"], equals: phoneNumberId },
+    },
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Writes
 // ─────────────────────────────────────────────────────────────────────────────

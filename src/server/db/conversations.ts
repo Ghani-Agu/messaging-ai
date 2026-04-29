@@ -319,6 +319,10 @@ export function listConversationsForTenant(args: {
  * transaction: conversation.lastMessageAt and customer.lastSeenAt are
  * bumped. Returns the new Message row so the route can flush it to the
  * SSE stream as the first frame.
+ *
+ * `providerMessageId` is the upstream message ID (e.g. WhatsApp wamid).
+ * Persist it on inbound rows so webhook retries can be deduped on the
+ * next call via findMessageByProviderId. Widget rows pass undefined.
  */
 export async function recordInboundMessage(args: {
   tenantId: string;
@@ -327,6 +331,7 @@ export async function recordInboundMessage(args: {
   content: string;
   contentType?: MessageContentType;
   mediaUrl?: string;
+  providerMessageId?: string;
 }): Promise<Message> {
   const now = new Date();
   return prisma.$transaction(async (tx) => {
@@ -339,6 +344,7 @@ export async function recordInboundMessage(args: {
         content: args.content,
         contentType: args.contentType ?? "TEXT",
         mediaUrl: args.mediaUrl ?? null,
+        providerMessageId: args.providerMessageId ?? null,
         createdAt: now,
       },
     });
@@ -351,6 +357,79 @@ export async function recordInboundMessage(args: {
       data: { lastSeenAt: now },
     });
     return message;
+  });
+}
+
+/**
+ * Webhook idempotency lookup. Returns the existing Message if this
+ * provider message ID is already persisted for the tenant; null otherwise.
+ * Backed by the Message_tenantId_providerMessageId_idx composite from
+ * Phase 6a.
+ */
+export function findMessageByProviderId(args: {
+  tenantId: string;
+  providerMessageId: string;
+}): Promise<Message | null> {
+  return prisma.message.findFirst({
+    where: {
+      tenantId: args.tenantId,
+      providerMessageId: args.providerMessageId,
+    },
+  });
+}
+
+/**
+ * Apply a delivery-status update from a provider webhook to an OUTBOUND
+ * Message row. Atomic JSON merge into aiMetadata so concurrent updates
+ * (e.g. two retries of the same status) don't lose unrelated metadata.
+ * Returns the number of rows affected — 0 means no matching row, which
+ * the caller treats as a soft failure (likely a webhook replay arriving
+ * for a long-pruned conversation).
+ *
+ * Status semantics (Meta/360dialog):
+ *   sent      — accepted by provider
+ *   delivered — handset acknowledged
+ *   read      — customer opened (when read receipts are on)
+ *   failed    — couldn't deliver (e.g. invalid number)
+ */
+export async function updateMessageDeliveryStatus(args: {
+  tenantId: string;
+  providerMessageId: string;
+  status: "sent" | "delivered" | "read" | "failed";
+}): Promise<number> {
+  const now = new Date().toISOString();
+  // jsonb_build_object lets us merge two keys atomically; COALESCE
+  // handles the rare case where aiMetadata is NULL (shouldn't happen
+  // for OUTBOUND/AI rows but defensive against a hand-written test row).
+  const result = await prisma.$executeRawUnsafe(
+    `UPDATE "Message"
+        SET "aiMetadata" = COALESCE("aiMetadata", '{}'::jsonb) || jsonb_build_object(
+          'deliveryStatus', $1::text,
+          'deliveryStatusAt', $2::text
+        )
+      WHERE "tenantId" = $3 AND "providerMessageId" = $4`,
+    args.status,
+    now,
+    args.tenantId,
+    args.providerMessageId,
+  );
+  return result;
+}
+
+/**
+ * Stamp the providerMessageId on an existing OUTBOUND row after the
+ * provider's sendMessage call returned successfully. Called by the
+ * outbound-send hook (Phase 6d). Idempotent — if the row already has
+ * a providerMessageId it's overwritten with the new value.
+ */
+export async function setMessageProviderId(args: {
+  tenantId: string;
+  messageId: string;
+  providerMessageId: string;
+}): Promise<void> {
+  await prisma.message.updateMany({
+    where: { id: args.messageId, tenantId: args.tenantId },
+    data: { providerMessageId: args.providerMessageId },
   });
 }
 
