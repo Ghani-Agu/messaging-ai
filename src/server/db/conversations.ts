@@ -39,7 +39,22 @@ import type { HistoryTurn } from "@/server/ai/prompts/system";
  * Persisted shape for Message.aiMetadata (AI rows only). Matches the
  * orchestrator's BrainResult, minus the reply text (which lives in
  * Message.content). The dashboard detail view reads this verbatim.
+ *
+ * Phase 6 additions (set by the outbound-dispatch hook after
+ * recordAiMessage commits + by inbound delivery-status webhooks):
+ *   - deliveryStatus / deliveryStatusAt — provider lifecycle. The
+ *     dashboard renders an indicator on the bubble.
+ *   - outboundSendError — present iff deliveryStatus = "failed";
+ *     surfaced to the operator in the dashboard.
  */
+export type MessageDeliveryStatus =
+  | "sent"
+  | "delivered"
+  | "read"
+  | "failed"
+  | "skipped_outside_window"
+  | "skipped_unsupported_channel";
+
 export type MessageAiMetadata = {
   modelId: string;
   language: SupportedReplyLanguage;
@@ -52,6 +67,9 @@ export type MessageAiMetadata = {
   usage: { inputTokens: number; outputTokens: number } | null;
   citations: BrainCitation[];
   citationsUsed: number[];
+  deliveryStatus?: MessageDeliveryStatus;
+  deliveryStatusAt?: string; // ISO
+  outboundSendError?: string;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -379,12 +397,70 @@ export function findMessageByProviderId(args: {
 }
 
 /**
+ * Atomic merge of one or more keys into Message.aiMetadata. COALESCE
+ * handles the rare case where aiMetadata is NULL; the `||` jsonb
+ * operator merges new keys over existing ones. Single UPDATE, no race
+ * window vs concurrent writers (e.g. a webhook status update racing the
+ * outbound-dispatch hook).
+ *
+ * Used both by the WhatsApp webhook handler (delivery-status updates
+ * from the provider) and by the outbound-dispatch hook (post-commit
+ * delivery-status from our own send result).
+ *
+ * Returns the number of rows affected; 0 means no matching row (likely
+ * a webhook replay arriving for a long-pruned conversation, or an
+ * unknown providerMessageId — the caller treats it as a soft miss).
+ *
+ * `byProviderMessageId` and `byMessageId` are the two lookup modes;
+ * exactly one must be specified.
+ */
+export async function mergeMessageAiMetadata(args: {
+  tenantId: string;
+  byProviderMessageId?: string;
+  byMessageId?: string;
+  fields: Record<string, string>;
+}): Promise<number> {
+  if (Object.keys(args.fields).length === 0) return 0;
+  const lookupByProvider = args.byProviderMessageId !== undefined;
+  const lookupById = args.byMessageId !== undefined;
+  if (lookupByProvider === lookupById) {
+    throw new Error(
+      "mergeMessageAiMetadata: specify exactly one of byProviderMessageId / byMessageId",
+    );
+  }
+
+  // Build the SET clause's jsonb_build_object dynamically — keys are
+  // hard-coded by the caller (not from user input), so string interp is
+  // safe. Values are bound parameters.
+  const keys = Object.keys(args.fields);
+  const buildObjectArgs = keys
+    .map((k, i) => `'${k}', $${i + 1}::text`)
+    .join(", ");
+  const tenantIdParamIndex = keys.length + 1;
+  const lookupParamIndex = keys.length + 2;
+  const lookupColumn = lookupByProvider
+    ? `"providerMessageId"`
+    : `"id"`;
+  const lookupValue = lookupByProvider
+    ? args.byProviderMessageId!
+    : args.byMessageId!;
+
+  const sql = `UPDATE "Message"
+        SET "aiMetadata" = COALESCE("aiMetadata", '{}'::jsonb) || jsonb_build_object(${buildObjectArgs})
+      WHERE "tenantId" = $${tenantIdParamIndex} AND ${lookupColumn} = $${lookupParamIndex}`;
+
+  return prisma.$executeRawUnsafe(
+    sql,
+    ...keys.map((k) => args.fields[k]),
+    args.tenantId,
+    lookupValue,
+  );
+}
+
+/**
  * Apply a delivery-status update from a provider webhook to an OUTBOUND
- * Message row. Atomic JSON merge into aiMetadata so concurrent updates
- * (e.g. two retries of the same status) don't lose unrelated metadata.
- * Returns the number of rows affected — 0 means no matching row, which
- * the caller treats as a soft failure (likely a webhook replay arriving
- * for a long-pruned conversation).
+ * Message row. Wrapper over mergeMessageAiMetadata — the webhook only
+ * needs to bump deliveryStatus + deliveryStatusAt.
  *
  * Status semantics (Meta/360dialog):
  *   sent      — accepted by provider
@@ -397,23 +473,37 @@ export async function updateMessageDeliveryStatus(args: {
   providerMessageId: string;
   status: "sent" | "delivered" | "read" | "failed";
 }): Promise<number> {
-  const now = new Date().toISOString();
-  // jsonb_build_object lets us merge two keys atomically; COALESCE
-  // handles the rare case where aiMetadata is NULL (shouldn't happen
-  // for OUTBOUND/AI rows but defensive against a hand-written test row).
-  const result = await prisma.$executeRawUnsafe(
-    `UPDATE "Message"
-        SET "aiMetadata" = COALESCE("aiMetadata", '{}'::jsonb) || jsonb_build_object(
-          'deliveryStatus', $1::text,
-          'deliveryStatusAt', $2::text
-        )
-      WHERE "tenantId" = $3 AND "providerMessageId" = $4`,
-    args.status,
-    now,
-    args.tenantId,
-    args.providerMessageId,
-  );
-  return result;
+  return mergeMessageAiMetadata({
+    tenantId: args.tenantId,
+    byProviderMessageId: args.providerMessageId,
+    fields: {
+      deliveryStatus: args.status,
+      deliveryStatusAt: new Date().toISOString(),
+    },
+  });
+}
+
+/**
+ * Most recent INBOUND message timestamp on a conversation. Used by the
+ * outbound-dispatch hook to evaluate the WhatsApp 24h customer-service
+ * window. Returns null when the conversation has no inbound messages
+ * (the AI is never the conversation-starter in v1, so a null inbound
+ * timestamp means the window is closed for outbound).
+ */
+export async function getLastInboundAt(args: {
+  tenantId: string;
+  conversationId: string;
+}): Promise<Date | null> {
+  const row = await prisma.message.findFirst({
+    where: {
+      tenantId: args.tenantId,
+      conversationId: args.conversationId,
+      direction: "INBOUND",
+    },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+  return row?.createdAt ?? null;
 }
 
 /**
@@ -439,6 +529,17 @@ export async function setMessageProviderId(args: {
  * conversation.lastMessageAt is bumped, conversation.language /
  * .sentiment patched if the brain reported a value.
  *
+ * Phase 6d: AFTER the transaction commits, fires a channel-aware
+ * post-commit side effect via dispatchOutboundReply. WIDGET is a
+ * no-op (the streaming route already flushed the reply); WHATSAPP
+ * checks the 24h window and calls the provider's sendMessage; future
+ * channels plug in by adding a switch arm in outbound-dispatch.ts.
+ *
+ * The dispatch never throws — it stashes any failure into the message's
+ * aiMetadata.deliveryStatus so the dashboard surfaces it. The brain's
+ * persisted reply is never lost just because the provider call fell
+ * over.
+ *
  * Does NOT touch conversation.status or conversation.aiEnabled —
  * escalation handoff is a separate seam (markConversationForHandoff)
  * so Phase 8 can replace it with Escalation row + notifications
@@ -451,8 +552,8 @@ export async function recordAiMessage(args: {
   aiMetadata: MessageAiMetadata;
 }): Promise<Message> {
   const now = new Date();
-  return prisma.$transaction(async (tx) => {
-    const message = await tx.message.create({
+  const message = await prisma.$transaction(async (tx) => {
+    const m = await tx.message.create({
       data: {
         tenantId: args.tenantId,
         conversationId: args.conversationId,
@@ -471,8 +572,23 @@ export async function recordAiMessage(args: {
         language: args.aiMetadata.language,
       },
     });
-    return message;
+    return m;
   });
+
+  // Post-commit channel-aware send. Imported lazily to avoid the
+  // src/server/db/ → src/server/channels/ direction looking like a
+  // hard dep cycle to the linter when channels reach back into db.
+  const { dispatchOutboundReply } = await import(
+    "@/server/channels/outbound-dispatch"
+  );
+  await dispatchOutboundReply({
+    tenantId: args.tenantId,
+    messageId: message.id,
+    conversationId: args.conversationId,
+    content: args.content,
+  });
+
+  return message;
 }
 
 /**
