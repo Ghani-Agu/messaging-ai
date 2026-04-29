@@ -23,7 +23,8 @@ import { StubWhatsAppClient } from "./stub";
  * implementations.
  *
  * 24h-window enforcement is also NOT on this interface — it lives in
- * src/server/channels/whatsapp/policy.ts and is checked by the
+ * src/server/channels/policy.ts (channel-agnostic since 7a — same 24h
+ * window applies to Meta channels too) and is checked by the
  * outbound-send hook (in src/server/db/conversations.ts as of 6d) BEFORE
  * sendMessage is called. sendMessage assumes the window is open. This
  * keeps the policy decision in one place rather than scattering it

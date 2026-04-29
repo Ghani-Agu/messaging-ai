@@ -1,14 +1,21 @@
 import "server-only";
 
 /**
- * WhatsApp 24h customer-service window policy.
+ * 24h customer-service window policy — channel-agnostic.
  *
- * Meta / 360dialog enforces a hard rule: outside a 24-hour window from the
- * customer's last inbound message, free-form replies are blocked. The only
- * way to re-engage outside that window is via approved "template messages,"
- * which require a separate approval flow.
+ * Meta-family messaging (WhatsApp via 360dialog, Messenger, Instagram DMs)
+ * enforces a hard rule: outside a 24-hour window from the customer's last
+ * inbound message, free-form replies are blocked. The only way to re-engage
+ * outside that window is via approved "template messages" (WhatsApp) or
+ * "message tags" (Messenger / Instagram), each of which requires a separate
+ * approval flow.
  *
- * Phase 6 v1 ships the read-side check only:
+ * The window length and semantics are identical across all three channels —
+ * which is why this helper lives at the channel-agnostic layer (7a moved
+ * it from src/server/channels/whatsapp/policy.ts to here without API
+ * changes).
+ *
+ * Read-side check only (Phase 6 v1, applies to Phase 7 too):
  *
  *   - inside  → outbound send proceeds normally.
  *   - outside → AI reply is persisted (operator-visible in the dashboard,
@@ -16,7 +23,8 @@ import "server-only";
  *               call is skipped. No silent failure; the operator sees the
  *               draft AI reply and can act.
  *
- * Templates and re-engagement land in Phase 6.5.
+ * Templates / tags + re-engagement land in Phase 6.5 (alongside the
+ * WhatsApp template approval flow).
  *
  * The check is computed-on-read so the policy never goes stale: we don't
  * cache a "window open until X" timestamp on the conversation. Every

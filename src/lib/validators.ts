@@ -240,3 +240,95 @@ export const whatsappCredentialsSchema = z.object({
   webhookSecret: z.string().trim().min(16).max(256),
 });
 export type WhatsAppCredentials = z.infer<typeof whatsappCredentialsSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Meta channels — Messenger + Instagram (Phase 7a)
+//
+// Both ride the Meta Graph API. Provider abstraction matches the Phase 6
+// WhatsApp pattern (one provider in the enum for now; extension later is
+// a one-line schema change). Connect flow paste-token gives access to a
+// Facebook Page; if the Page has an Instagram Business Account linked,
+// both Channel rows are created from the same paste.
+//
+// Webhook routing differs from WhatsApp's per-channel webhookSecret model:
+// HMAC validation uses META_APP_SECRET (env var, global across all Pages
+// and IG accounts on the Meta app). Per-channel `Channel.credentials`
+// holds only the page-access-token; the app secret never lives in DB.
+// CLAUDE.md §6 will document this deviation in 7g.
+//
+// Lookup-key indexes (raw SQL, partial unique on JSON path) live in
+// 20260429020000_phase7a_corrective_restore_hnsw_add_meta_indexes:
+//   - Channel_messenger_pageId_unique on config->>'pageId' WHERE type='MESSENGER'
+//   - Channel_instagram_igUserId_unique on config->>'igUserId' WHERE type='INSTAGRAM'
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Provider switch for both Messenger and Instagram. Only `meta-cloud` ships
+ * in Phase 7. Adding alternatives later (e.g. a BSP) is a one-line enum
+ * change plus a new client implementation.
+ */
+export const metaProviderSchema = z.enum(["meta-cloud"]);
+export type MetaProvider = z.infer<typeof metaProviderSchema>;
+
+export const messengerChannelConfigSchema = z.object({
+  provider: metaProviderSchema.default("meta-cloud"),
+  // The Facebook Page ID. Forwarded by Meta in
+  // entry[].messaging[].recipient.id on every webhook. Indexed by the
+  // partial unique Channel_messenger_pageId_unique.
+  pageId: z.string().trim().min(1).max(64),
+  // Operator-confirmed Page name from /PAGE_ID?fields=name. Surfaced in
+  // the dashboard channels list + conversation detail header.
+  pageName: z.string().trim().min(1).max(120),
+  // Optional dashboard override; falls back to Channel.displayName.
+  displayName: z.string().trim().min(1).max(80).optional(),
+});
+export type MessengerChannelConfig = z.infer<typeof messengerChannelConfigSchema>;
+
+export function parseMessengerChannelConfig(raw: unknown): MessengerChannelConfig {
+  return messengerChannelConfigSchema.parse(raw);
+}
+
+export const instagramChannelConfigSchema = z.object({
+  provider: metaProviderSchema.default("meta-cloud"),
+  // Instagram User ID — Meta's identifier for the IG Business Account.
+  // Forwarded as entry[].id on Instagram-shape webhook payloads. Indexed
+  // by the partial unique Channel_instagram_igUserId_unique.
+  igUserId: z.string().trim().min(1).max(64),
+  // The IG @username at the time of connect (we cache it for display;
+  // tenant can refresh by reconnecting).
+  igUsername: z.string().trim().min(1).max(120).optional(),
+  // The Facebook Page ID this IG account is linked to. IG Business
+  // accounts always ride a Page; we record the linkage so the connect
+  // flow knows which MESSENGER channel (if any) shares the page-access-
+  // token. Stored as a string; not indexed (the messenger lookup uses
+  // its own pageId; this field is informational).
+  pageId: z.string().trim().min(1).max(64),
+  // Optional dashboard override; falls back to Channel.displayName.
+  displayName: z.string().trim().min(1).max(80).optional(),
+});
+export type InstagramChannelConfig = z.infer<typeof instagramChannelConfigSchema>;
+
+export function parseInstagramChannelConfig(raw: unknown): InstagramChannelConfig {
+  return instagramChannelConfigSchema.parse(raw);
+}
+
+/**
+ * Plaintext shape of Meta channel credentials. Encrypted via
+ * encryptCredentials before write; never persisted in this shape.
+ *
+ *   pageAccessToken — long-lived (60d) Page Access Token. Used as the
+ *                     bearer for outbound /messages calls and the
+ *                     /<psid>?fields=… profile lookups. Same value used
+ *                     by both the MESSENGER and INSTAGRAM channels of a
+ *                     given Page (they share the token).
+ *
+ * App-level secrets (META_APP_SECRET for HMAC verification,
+ * META_VERIFY_TOKEN for the webhook handshake) live in env vars, not in
+ * Channel.credentials — they're global across the Meta app, not per
+ * Page. CLAUDE.md §6 documents this Phase 7 deviation from the Phase 6
+ * per-channel-secret pattern.
+ */
+export const metaCredentialsSchema = z.object({
+  pageAccessToken: z.string().trim().min(1).max(2048),
+});
+export type MetaCredentials = z.infer<typeof metaCredentialsSchema>;

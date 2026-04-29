@@ -1,4 +1,4 @@
-// Verifies Phase 6 schema landed correctly on the live DB:
+// Verifies Phase 6 + 7 schema landed correctly on the live DB:
 //   - Channel / Customer / Conversation / Message tables exist
 //   - All channel enum types exist with the right variants
 //   - The widget-public-key partial unique index exists with the right WHERE,
@@ -7,6 +7,11 @@
 //     composite index exist; the partial unique on
 //     Channel.config->>'phoneNumberId' (WHERE type='WHATSAPP') exists with
 //     the right WHERE; the planner picks it for the inbound webhook lookup
+//   - (Phase 7a — Meta routing) the partial uniques on
+//     Channel.config->>'pageId' (WHERE type='MESSENGER') and
+//     Channel.config->>'igUserId' (WHERE type='INSTAGRAM') exist with the
+//     right WHEREs; the planner picks each for their respective inbound
+//     webhook lookups
 //
 // Run: npx dotenv -e .env.local -- node scripts/verify-channels-schema.mjs
 
@@ -22,7 +27,9 @@ const fail = (msg) => {
 
 const EXPECTED_TABLES = ["Channel", "Conversation", "Customer", "Message"];
 const EXPECTED_ENUMS = {
-  ChannelType: ["WHATSAPP", "INSTAGRAM", "WIDGET"],
+  // ChannelType: MESSENGER appended in Phase 7a (after WIDGET, in creation
+  // order — Postgres preserves enum addition order in pg_enum.enumsortorder).
+  ChannelType: ["WHATSAPP", "INSTAGRAM", "WIDGET", "MESSENGER"],
   ChannelStatus: ["CONNECTED", "DISCONNECTED", "ERROR"],
   ConversationStatus: ["ACTIVE", "PAUSED", "CLOSED", "HUMAN_HANDLING"],
   MessageDirection: ["INBOUND", "OUTBOUND"],
@@ -193,6 +200,100 @@ try {
   } else {
     fail(`planner did not pick the WhatsApp partial unique index. Plan: ${waPlanStr}`);
   }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Phase 7a additions — Messenger + Instagram routing partial uniques
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Partial unique on Channel.config->>'pageId' WHERE type='MESSENGER'.
+  const msgrIdx = await prisma.$queryRawUnsafe(
+    `SELECT indexname, indexdef FROM pg_indexes
+      WHERE schemaname='public' AND tablename='Channel'
+        AND indexname='Channel_messenger_pageId_unique'`,
+  );
+  const msgrIdxDef = msgrIdx[0]?.indexdef ?? "";
+  const msgrLooksRight =
+    /UNIQUE INDEX/i.test(msgrIdxDef) &&
+    /\(\(config ->> 'pageId'::text\)\)/i.test(msgrIdxDef) &&
+    /WHERE/i.test(msgrIdxDef) &&
+    /type = 'MESSENGER'::"ChannelType"/i.test(msgrIdxDef) &&
+    /\(config ->> 'pageId'::text\) IS NOT NULL/i.test(msgrIdxDef);
+  if (msgrLooksRight) {
+    ok(`partial unique index Channel_messenger_pageId_unique present`);
+  } else {
+    fail(
+      `Channel_messenger_pageId_unique missing or wrong: ${JSON.stringify(msgrIdx)}`,
+    );
+  }
+
+  const msgrPlanJson = await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL enable_seqscan = off`);
+    const rows = await tx.$queryRawUnsafe(
+      `EXPLAIN (FORMAT JSON)
+       SELECT id FROM "Channel"
+        WHERE ("config" ->> 'pageId') = 'page_test_lookup_sentinel'
+          AND "type" = 'MESSENGER'`,
+    );
+    return rows[0]["QUERY PLAN"];
+  });
+  const msgrPlanStr = JSON.stringify(msgrPlanJson, null, 2);
+  if (msgrPlanStr.includes("Channel_messenger_pageId_unique")) {
+    ok(`planner uses Channel_messenger_pageId_unique for the lookup`);
+    console.log("  EXPLAIN (FORMAT JSON):");
+    console.log(
+      msgrPlanStr
+        .split("\n")
+        .map((l) => "    " + l)
+        .join("\n"),
+    );
+  } else {
+    fail(`planner did not pick the Messenger partial unique index. Plan: ${msgrPlanStr}`);
+  }
+
+  // Partial unique on Channel.config->>'igUserId' WHERE type='INSTAGRAM'.
+  const igIdx = await prisma.$queryRawUnsafe(
+    `SELECT indexname, indexdef FROM pg_indexes
+      WHERE schemaname='public' AND tablename='Channel'
+        AND indexname='Channel_instagram_igUserId_unique'`,
+  );
+  const igIdxDef = igIdx[0]?.indexdef ?? "";
+  const igLooksRight =
+    /UNIQUE INDEX/i.test(igIdxDef) &&
+    /\(\(config ->> 'igUserId'::text\)\)/i.test(igIdxDef) &&
+    /WHERE/i.test(igIdxDef) &&
+    /type = 'INSTAGRAM'::"ChannelType"/i.test(igIdxDef) &&
+    /\(config ->> 'igUserId'::text\) IS NOT NULL/i.test(igIdxDef);
+  if (igLooksRight) {
+    ok(`partial unique index Channel_instagram_igUserId_unique present`);
+  } else {
+    fail(
+      `Channel_instagram_igUserId_unique missing or wrong: ${JSON.stringify(igIdx)}`,
+    );
+  }
+
+  const igPlanJson = await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL enable_seqscan = off`);
+    const rows = await tx.$queryRawUnsafe(
+      `EXPLAIN (FORMAT JSON)
+       SELECT id FROM "Channel"
+        WHERE ("config" ->> 'igUserId') = 'ig_test_lookup_sentinel'
+          AND "type" = 'INSTAGRAM'`,
+    );
+    return rows[0]["QUERY PLAN"];
+  });
+  const igPlanStr = JSON.stringify(igPlanJson, null, 2);
+  if (igPlanStr.includes("Channel_instagram_igUserId_unique")) {
+    ok(`planner uses Channel_instagram_igUserId_unique for the lookup`);
+    console.log("  EXPLAIN (FORMAT JSON):");
+    console.log(
+      igPlanStr
+        .split("\n")
+        .map((l) => "    " + l)
+        .join("\n"),
+    );
+  } else {
+    fail(`planner did not pick the Instagram partial unique index. Plan: ${igPlanStr}`);
+  }
 } catch (err) {
   console.error("verify failed:", err);
   bad++;
@@ -204,5 +305,5 @@ if (bad > 0) {
   console.error(`\n${bad} check(s) failed.`);
   process.exit(1);
 } else {
-  console.log("\nPhase 6 channels schema verified.");
+  console.log("\nPhase 7 channels schema verified.");
 }

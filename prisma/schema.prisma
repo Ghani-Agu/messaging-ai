@@ -56,6 +56,7 @@ enum ChannelType {
   WHATSAPP
   INSTAGRAM
   WIDGET
+  MESSENGER
 }
 
 enum ChannelStatus {

@@ -6,7 +6,7 @@ import {
   isEncryptedCredentials,
 } from "@/server/channels/credentials";
 import { getWhatsAppClient } from "./whatsapp/client";
-import { isWithinCustomerServiceWindow } from "./whatsapp/policy";
+import { isWithinCustomerServiceWindow } from "./policy";
 import {
   whatsappCredentialsSchema,
   type WhatsAppCredentials,
@@ -71,6 +71,10 @@ export async function dispatchOutboundReply(
           customerPhone: convo.customer.phone ?? `+${convo.customer.externalId}`,
         });
         return;
+      // 7a: MESSENGER + INSTAGRAM share the same Phase-7-pending placeholder.
+      // 7d will replace both with real dispatchMessenger / dispatchInstagram
+      // calls once the adapters land in 7b.
+      case "MESSENGER":
       case "INSTAGRAM":
         await stashDeliveryStatus({
           tenantId: args.tenantId,

@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   AlertTriangle,
   ArrowLeft,
+  Facebook,
   Globe,
   Instagram,
   Lock,
@@ -23,6 +24,10 @@ const CHANNEL_ICON: Record<ChannelType, LucideIcon> = {
   WIDGET: Globe,
   WHATSAPP: MessageCircle,
   INSTAGRAM: Instagram,
+  // Phase 7a — added so the ChannelType-keyed map is exhaustive after
+  // the MESSENGER enum addition. 7f refines header rendering for
+  // Messenger threads (Page name, customer PSID, etc).
+  MESSENGER: Facebook,
 };
 
 export function ConversationDetailClient({
