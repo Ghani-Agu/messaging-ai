@@ -27,7 +27,7 @@ type FilterOption = {
 
 const FILTERS: FilterOption[] = [
   { value: "WIDGET", label: "Website", icon: Globe, enabled: true },
-  { value: "WHATSAPP", label: "WhatsApp", icon: MessageCircle, enabled: false, comingInPhase: 6 },
+  { value: "WHATSAPP", label: "WhatsApp", icon: MessageCircle, enabled: true },
   { value: "INSTAGRAM", label: "Instagram", icon: Instagram, enabled: false, comingInPhase: 7 },
 ];
 

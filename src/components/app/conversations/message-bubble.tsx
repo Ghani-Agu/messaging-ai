@@ -1,11 +1,26 @@
 "use client";
 
 import { useState } from "react";
-import { Bot, User, UserCog } from "lucide-react";
+import {
+  AlertTriangle,
+  Bot,
+  Check,
+  CheckCheck,
+  Clock,
+  FileText,
+  ImageIcon,
+  Mic,
+  Paperclip,
+  User,
+  UserCog,
+} from "lucide-react";
 import type { Message } from "@prisma/client";
 import { cn } from "@/lib/utils";
 import { resolveDirection } from "@/lib/rtl";
-import type { MessageAiMetadata } from "@/server/db/conversations";
+import type {
+  MessageAiMetadata,
+  MessageDeliveryStatus,
+} from "@/server/db/conversations";
 
 /**
  * Dashboard MessageBubble. Three visual variants:
@@ -62,13 +77,185 @@ export function DashboardMessageBubble({ message }: { message: Message }) {
           bubbleVariant,
         )}
       >
-        {message.content}
+        <MessageBody message={message} />
       </div>
+      {meta?.deliveryStatus && !isInbound ? (
+        <DeliveryStatusIndicator
+          status={meta.deliveryStatus}
+          error={meta.outboundSendError}
+        />
+      ) : null}
       {meta?.citations && meta.citations.length > 0 ? (
         <CitationStrip
           citations={meta.citations}
           used={meta.citationsUsed ?? []}
         />
+      ) : null}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Body — TEXT vs IMAGE vs VOICE vs FILE
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MessageBody({ message }: { message: Message }) {
+  const t = message.contentType;
+  if (t === "TEXT") {
+    return <span>{message.content}</span>;
+  }
+  // For IMAGE: if mediaUrl looks like an http(s) URL we render the
+  // image inline; otherwise it's a 360dialog media-id (resolves via
+  // an authenticated /media/<id> call we don't ship in Phase 6 v1) —
+  // show a placeholder. The caption/content shows underneath.
+  if (t === "IMAGE") {
+    const httpUrl = isHttpUrl(message.mediaUrl);
+    return (
+      <div className="space-y-2">
+        {httpUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={httpUrl}
+            alt={message.content}
+            className="max-h-64 max-w-full rounded-md border border-[var(--border-subtle)]"
+          />
+        ) : (
+          <MediaPlaceholder
+            icon={<ImageIcon aria-hidden className="size-3.5" />}
+            label="Image"
+            mediaId={message.mediaUrl}
+          />
+        )}
+        {message.content && message.content !== "[image]" ? (
+          <span>{message.content}</span>
+        ) : null}
+      </div>
+    );
+  }
+  if (t === "VOICE") {
+    return (
+      <MediaPlaceholder
+        icon={<Mic aria-hidden className="size-3.5" />}
+        label="Voice message"
+        mediaId={message.mediaUrl}
+      />
+    );
+  }
+  if (t === "FILE") {
+    return (
+      <MediaPlaceholder
+        icon={<FileText aria-hidden className="size-3.5" />}
+        label={
+          message.content.startsWith("[document:")
+            ? message.content.slice(11, -1).trim()
+            : "File"
+        }
+        mediaId={message.mediaUrl}
+      />
+    );
+  }
+  return <span>{message.content}</span>;
+}
+
+function MediaPlaceholder({
+  icon,
+  label,
+  mediaId,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  mediaId: string | null;
+}) {
+  return (
+    <div className="inline-flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-base)]/40 px-2.5 py-1.5 text-body-sm">
+      <Paperclip aria-hidden className="size-3.5 text-[var(--text-tertiary)]" />
+      {icon}
+      <span className="text-[var(--text-primary)]">{label}</span>
+      {mediaId ? (
+        <span className="font-mono text-caption text-[var(--text-tertiary)]">
+          ({truncateMid(mediaId, 18)})
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function isHttpUrl(value: string | null): string | null {
+  if (!value) return null;
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+  return null;
+}
+
+function truncateMid(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s;
+  const head = Math.ceil(maxLen / 2) - 1;
+  const tail = Math.floor(maxLen / 2) - 1;
+  return `${s.slice(0, head)}…${s.slice(-tail)}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Delivery status indicator (non-widget outbound only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DELIVERY_STATUS_VARIANTS: Record<
+  MessageDeliveryStatus,
+  { label: string; className: string; Icon: typeof Check }
+> = {
+  sent: {
+    label: "Sent",
+    className: "text-[var(--text-tertiary)]",
+    Icon: Check,
+  },
+  delivered: {
+    label: "Delivered",
+    className: "text-[var(--text-secondary)]",
+    Icon: CheckCheck,
+  },
+  read: {
+    label: "Read",
+    className: "text-[var(--accent-hover)]",
+    Icon: CheckCheck,
+  },
+  failed: {
+    label: "Failed",
+    className: "text-[var(--danger)]",
+    Icon: AlertTriangle,
+  },
+  skipped_outside_window: {
+    label: "Not delivered — 24h window closed",
+    className: "text-[var(--warning)]",
+    Icon: Clock,
+  },
+  skipped_unsupported_channel: {
+    label: "Not delivered — channel not supported",
+    className: "text-[var(--text-tertiary)]",
+    Icon: AlertTriangle,
+  },
+};
+
+function DeliveryStatusIndicator({
+  status,
+  error,
+}: {
+  status: MessageDeliveryStatus;
+  error: string | undefined;
+}) {
+  const v = DELIVERY_STATUS_VARIANTS[status];
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center gap-1 self-end text-caption",
+        v.className,
+      )}
+    >
+      <v.Icon aria-hidden className="size-3" />
+      <span>{v.label}</span>
+      {error && status === "failed" ? (
+        <span className="ml-1 max-w-[40ch] truncate text-[var(--text-tertiary)]">
+          ({error})
+        </span>
       ) : null}
     </div>
   );

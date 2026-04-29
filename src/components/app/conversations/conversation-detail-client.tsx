@@ -133,7 +133,10 @@ function DetailHeader({
             </span>
             <span aria-hidden>·</span>
             <span className="font-mono text-caption text-[var(--text-tertiary)]">
-              {conversation.customer.externalId}
+              {conversation.channel.type === "WHATSAPP" &&
+              conversation.customer.phone
+                ? conversation.customer.phone
+                : conversation.customer.externalId}
             </span>
             {conversation.language ? (
               <>
