@@ -121,6 +121,51 @@ export function getChannelByWhatsAppPhoneNumberId(
   });
 }
 
+/**
+ * Resolve a Facebook Page ID → MESSENGER Channel. Hot path: every inbound
+ * Meta webhook with `object: "page"` does this once per inbound entry.
+ * Backed by the Channel_messenger_pageId_unique partial unique index from
+ * 20260429020000_phase7a_corrective_restore_hnsw_add_meta_indexes.
+ *
+ * Unlike WhatsApp's per-channel webhookSecret model, the Meta webhook
+ * handler verifies HMAC against META_APP_SECRET (global) BEFORE this
+ * lookup runs — so a miss here is safe to surface as a structured 200+log
+ * (per Gate 1 H4: drop unknown pageId AFTER signature verification).
+ */
+export function getChannelByMessengerPageId(
+  pageId: string,
+): Promise<Channel | null> {
+  if (!pageId || pageId.length === 0) {
+    return Promise.resolve(null);
+  }
+  return prisma.channel.findFirst({
+    where: {
+      type: "MESSENGER",
+      config: { path: ["pageId"], equals: pageId },
+    },
+  });
+}
+
+/**
+ * Resolve an Instagram User ID → INSTAGRAM Channel. Hot path: every
+ * inbound Meta webhook with `object: "instagram"` does this once per
+ * inbound entry. Backed by the Channel_instagram_igUserId_unique partial
+ * unique index. Same post-HMAC drop semantics as the messenger lookup.
+ */
+export function getChannelByInstagramIgUserId(
+  igUserId: string,
+): Promise<Channel | null> {
+  if (!igUserId || igUserId.length === 0) {
+    return Promise.resolve(null);
+  }
+  return prisma.channel.findFirst({
+    where: {
+      type: "INSTAGRAM",
+      config: { path: ["igUserId"], equals: igUserId },
+    },
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Writes
 // ─────────────────────────────────────────────────────────────────────────────
