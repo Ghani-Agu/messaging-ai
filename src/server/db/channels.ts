@@ -4,6 +4,9 @@ import type { Channel, ChannelStatus, Prisma } from "@prisma/client";
 import { prisma } from "./client";
 import {
   parseWidgetChannelConfig,
+  type InstagramChannelConfig,
+  type MessengerChannelConfig,
+  type MetaCredentials,
   type WhatsAppChannelConfig,
   type WhatsAppCredentials,
   type WidgetChannelConfig,
@@ -385,6 +388,133 @@ export async function rotateWhatsAppWebhookSecret(
     },
   });
   return { webhookSecret: nextSecret };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Meta channels — Messenger + Instagram (Phase 7e)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The (single) MESSENGER channel for a tenant. Null if none yet. */
+export function getMessengerChannel(
+  tenantId: string,
+): Promise<Channel | null> {
+  return prisma.channel.findUnique({
+    where: { tenantId_type: { tenantId, type: "MESSENGER" } },
+  });
+}
+
+/** The (single) INSTAGRAM channel for a tenant. Null if none yet. */
+export function getInstagramChannel(
+  tenantId: string,
+): Promise<Channel | null> {
+  return prisma.channel.findUnique({
+    where: { tenantId_type: { tenantId, type: "INSTAGRAM" } },
+  });
+}
+
+/**
+ * Read + decrypt a Meta channel's credentials. Throws if the row's
+ * credentials column isn't a well-formed encrypted envelope, or if the
+ * envelope can't be decrypted (key mismatch / tampering). Caller-side
+ * try/catch is expected — failures here mean the operator needs to
+ * reconnect.
+ *
+ * Note: this is the strict variant for "I expect real credentials" call
+ * sites (e.g. the Test connection action). The placeholder-fallback
+ * variant lives in src/server/channels/meta/credentials.ts and is used
+ * by inbound + outbound dispatch where pre-connect-form `{}` blobs need
+ * to flow through to a Stub client.
+ */
+export function decryptMetaCredentials(channel: Channel): MetaCredentials {
+  if (!isEncryptedCredentials(channel.credentials)) {
+    throw new Error(
+      `decryptMetaCredentials: channel ${channel.id} credentials are not encrypted`,
+    );
+  }
+  return decryptCredentials<MetaCredentials>(channel.credentials);
+}
+
+/**
+ * Idempotent create-or-update of a tenant's MESSENGER channel.
+ *
+ * On first call (no row exists): encrypts the credentials envelope,
+ * creates the row CONNECTED. On subsequent calls (row exists): updates
+ * config + credentials in place.
+ *
+ * Throws on cross-tenant pageId collision (Postgres P2002 on
+ * Channel_messenger_pageId_unique). The caller maps this to a user-
+ * facing "This Facebook Page is already connected to another workspace"
+ * message — see src/server/channels/meta/actions.ts.
+ */
+export async function upsertMessengerChannel(args: {
+  tenantId: string;
+  config: MessengerChannelConfig;
+  credentials: MetaCredentials;
+}): Promise<Channel> {
+  const existing = await getMessengerChannel(args.tenantId);
+  const encrypted = encryptCredentials(args.credentials);
+  const displayName =
+    args.config.displayName ?? args.config.pageName ?? "Messenger";
+
+  if (existing) {
+    return prisma.channel.update({
+      where: { id: existing.id },
+      data: {
+        displayName,
+        config: args.config as unknown as Prisma.InputJsonValue,
+        credentials: encrypted as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+  return prisma.channel.create({
+    data: {
+      tenantId: args.tenantId,
+      type: "MESSENGER",
+      displayName,
+      status: "CONNECTED",
+      config: args.config as unknown as Prisma.InputJsonValue,
+      credentials: encrypted as unknown as Prisma.InputJsonValue,
+    },
+  });
+}
+
+/**
+ * Idempotent create-or-update of a tenant's INSTAGRAM channel. Mirror
+ * of upsertMessengerChannel — same lifecycle, different routing key
+ * (igUserId instead of pageId). Throws on cross-tenant igUserId
+ * collision (P2002 on Channel_instagram_igUserId_unique).
+ */
+export async function upsertInstagramChannel(args: {
+  tenantId: string;
+  config: InstagramChannelConfig;
+  credentials: MetaCredentials;
+}): Promise<Channel> {
+  const existing = await getInstagramChannel(args.tenantId);
+  const encrypted = encryptCredentials(args.credentials);
+  const displayName =
+    args.config.displayName ??
+    (args.config.igUsername ? `@${args.config.igUsername}` : "Instagram");
+
+  if (existing) {
+    return prisma.channel.update({
+      where: { id: existing.id },
+      data: {
+        displayName,
+        config: args.config as unknown as Prisma.InputJsonValue,
+        credentials: encrypted as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+  return prisma.channel.create({
+    data: {
+      tenantId: args.tenantId,
+      type: "INSTAGRAM",
+      displayName,
+      status: "CONNECTED",
+      config: args.config as unknown as Prisma.InputJsonValue,
+      credentials: encrypted as unknown as Prisma.InputJsonValue,
+    },
+  });
 }
 
 // Re-export for downstream consumers that want the EncryptedCredentials shape.

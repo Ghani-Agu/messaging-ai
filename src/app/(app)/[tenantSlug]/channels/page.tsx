@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 import { Globe, Instagram, MessageCircle } from "lucide-react";
 import { getTenantContext } from "@/server/tenancy/context";
-import { getWhatsAppChannel, getWidgetChannel } from "@/server/db/channels";
+import {
+  getInstagramChannel,
+  getMessengerChannel,
+  getWhatsAppChannel,
+  getWidgetChannel,
+} from "@/server/db/channels";
 import {
   ChannelRow,
   type ChannelRowStatus,
@@ -18,9 +23,11 @@ export default async function ChannelsPage({
 }) {
   const { tenantSlug } = await params;
   const ctx = await getTenantContext(tenantSlug);
-  const [widget, whatsapp] = await Promise.all([
+  const [widget, whatsapp, messenger, instagram] = await Promise.all([
     getWidgetChannel(ctx.tenant.id),
     getWhatsAppChannel(ctx.tenant.id),
+    getMessengerChannel(ctx.tenant.id),
+    getInstagramChannel(ctx.tenant.id),
   ]);
 
   let widgetStatus: ChannelRowStatus = "available";
@@ -39,6 +46,24 @@ export default async function ChannelsPage({
   const whatsappDescription = whatsapp
     ? "Connected via 360dialog. Configure display, rotate webhook secret, or pause."
     : "Connect your 360dialog number for two-way WhatsApp Business messaging.";
+
+  let messengerStatus: ChannelRowStatus = "available";
+  if (messenger) {
+    messengerStatus =
+      messenger.status === "CONNECTED" ? "connected" : "paused";
+  }
+  const messengerDescription = messenger
+    ? `${messenger.displayName} — Page DMs via the Meta Graph API.`
+    : "Connect a Facebook Page to handle Messenger DMs through the AI brain.";
+
+  let instagramStatus: ChannelRowStatus = "available";
+  if (instagram) {
+    instagramStatus =
+      instagram.status === "CONNECTED" ? "connected" : "paused";
+  }
+  const instagramDescription = instagram
+    ? `${instagram.displayName} — IG Business DMs via the Meta Graph API.`
+    : "Connect an Instagram Business account (linked to a Facebook Page) for DMs.";
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10 lg:py-14">
@@ -71,10 +96,20 @@ export default async function ChannelsPage({
         </li>
         <li>
           <ChannelRow
+            icon={MessageCircle}
+            name="Messenger"
+            description={messengerDescription}
+            status={messengerStatus}
+            href={`/${tenantSlug}/channels/messenger`}
+          />
+        </li>
+        <li>
+          <ChannelRow
             icon={Instagram}
             name="Instagram"
-            description="Reply to Instagram DMs from a connected Business account."
-            comingInPhase={7}
+            description={instagramDescription}
+            status={instagramStatus}
+            href={`/${tenantSlug}/channels/instagram`}
           />
         </li>
       </ul>
