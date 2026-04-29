@@ -27,14 +27,7 @@ import {
 import { runBrain } from "@/server/ai/orchestrator";
 import { getMessengerClient } from "@/server/channels/messenger/client";
 import { getInstagramClient } from "@/server/channels/instagram/client";
-import {
-  decryptCredentials,
-  isEncryptedCredentials,
-} from "@/server/channels/credentials";
-import {
-  metaCredentialsSchema,
-  type MetaCredentials,
-} from "@/lib/validators";
+import { readMetaCredentials } from "@/server/channels/meta/credentials";
 
 /**
  * POST /api/meta/webhook — single ingress for Meta Graph API webhooks.
@@ -464,31 +457,3 @@ async function fetchInstagramProfile(args: {
   }
 }
 
-/**
- * Read + decrypt a Meta channel's credentials. Returns a placeholder
- * MetaCredentials object on missing/malformed blob — the factory may
- * still route to a Stub client (META_APP_ID unset) which ignores the
- * token entirely, so the dispatch path remains exercisable in dev/test
- * before the connect form lands. In production with real env, a Real
- * client constructed against the placeholder token would fail on the
- * actual API call; the caller catches the error and returns null
- * (Customer stays unnamed, dashboard falls back to externalId).
- */
-const PLACEHOLDER_CREDENTIALS: MetaCredentials = {
-  pageAccessToken: "stub-placeholder-token",
-};
-
-function readMetaCredentials(channel: Channel): MetaCredentials {
-  if (!isEncryptedCredentials(channel.credentials)) {
-    return PLACEHOLDER_CREDENTIALS;
-  }
-  try {
-    return metaCredentialsSchema.parse(decryptCredentials(channel.credentials));
-  } catch (err) {
-    console.warn(
-      `meta/webhook: failed to decrypt credentials for channel ${channel.id}:`,
-      err instanceof Error ? err.message : err,
-    );
-    return PLACEHOLDER_CREDENTIALS;
-  }
-}
