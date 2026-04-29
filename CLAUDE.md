@@ -56,6 +56,7 @@ Workflow per phase:
 - Never hard-code colors, font sizes, spacing, or motion values — always use the design tokens (`src/app/globals.css` for CSS, `src/lib/design-tokens.ts` for JS, `src/lib/motion.ts` for animations).
 - Never expose a streaming endpoint as `GET + EventSource`. Always `POST + ReadableStream` with SSE-shaped data (`data: { ... }\n\n` framing for `delta` and `done` events). Settled twice in Phase 5: POST keeps tenant slug / auth headers / structured request body intact, and the data-events shape lets the client demux without reconnect logic.
 - Never write a concurrent upsert against a unique-keyed table without wrapping in `withP2002Retry` (`src/server/db/conversations.ts`). The race is real for any `(tenantId, channelType, externalId)` upsert under Phase 6/7 channel adapters — two simultaneous first-time messages from the same brand-new customer can both take the `!exists` branch and one gets `P2002`. Second attempt sees the committed row and goes down the update branch.
+- Never bypass security paths in stub channel adapters. Channel adapters follow the `StubXClient` / `RealXClient` / `getXClient(channel)` factory pattern (mirrors the `ClaudeClient` shape from §7a). Stubs must exercise the **full** security path — sign payloads with real HMAC against a real (stub) secret, round-trip the encrypted-credentials envelope, validate signatures the same way the real implementation will. The "always return true on signature verify in stub" pattern hides regressions until production. Real-API swap at credential time is then a single env-var change (`WHATSAPP_USE_STUB`, `WHATSAPP_360DIALOG_API_KEY`, etc.).
 - Never `git add -A` blindly — `.claude/`, `.env.local`, and other locals can sneak in. Stage by path.
 - Never `git commit --amend` or `--no-verify` without explicit project-lead approval.
 
@@ -165,6 +166,11 @@ Two interactive surprises around `prisma migrate dev`. Both stem from the same r
 
 When you strip a line, leave a one-line `-- INTENTIONAL: do not drop <index name> — managed via raw SQL` comment in its place so a future maintainer doesn't undo the strip. The verify scripts (`scripts/verify-knowledge-schema.mjs`, `scripts/verify-channels-schema.mjs`) catch missed strips after apply and should be run after every migration.
 
+**Recovery: pgbouncer-pooled session holds the advisory lock after Ctrl+C.** Hit during Phase 6a. `prisma migrate dev` takes a session-level advisory lock (`pg_advisory_lock(72707369)`) before running. If you Ctrl+C the drift prompt (per the rule above), the OS-level node process dies, but its pgbouncer-pooled DB session does not — the lock survives in the pooled session. Subsequent `db:migrate:deploy` / `db:migrate` calls then fail with `P1002: Timed out trying to acquire a postgres advisory lock`. Recovery options:
+
+- `npx dotenv -e .env.local -- node scripts/release-migrate-lock.mjs` — identifies any session in `pg_locks` holding objid=72707369 and `pg_terminate_backend`s it. Fast.
+- Wait for Supavisor's idle timeout (~10 min) and retry.
+
 ### Phase 6: widget public-key partial unique index is invisible to Prisma
 
 The same PSL gap that hides the HNSW index also hides the partial unique index on the widget's public key. The lookup the widget API runs on every request — `WHERE ("config"->>'publicKey') = $1 AND "type"='WIDGET'` — is served by:
@@ -180,6 +186,31 @@ PSL can't model this — Prisma's `@@unique` doesn't accept JSON path expression
 **Standing rule when generating future migrations:** every `prisma migrate dev --create-only` run will slip a `DROP INDEX "KnowledgeChunk_embedding_hnsw"` line into the generated SQL — strip it. (The widget public-key index is only "missing" from PSL, not "extra in DB", so Prisma doesn't try to drop it; only the HNSW one needs stripping.) `scripts/verify-channels-schema.mjs` confirms the partial unique index is present and that the planner picks it for the widget public-key lookup (EXPLAIN with `enable_seqscan=off`); run it whenever the Channel schema changes.
 
 Same workflow as Phase 3: `npm run db:migrate -- --create-only --name <name>`, edit, `npm run db:migrate` to apply, then run both verify scripts.
+
+### Webhook security checklist (Phase 6+ inbound webhooks)
+
+Standing rules for every inbound webhook handler in this codebase. Followed by the WhatsApp ingress (`src/app/api/whatsapp/webhook/route.ts`); applies verbatim to Phase 7 (Meta Graph for FB Messenger / IG) and any future channel.
+
+1. **`req.text()` once, before HMAC.** Read the raw body as a string exactly once and parse it via `JSON.parse` from that string. Never call `req.json()` (or any parse-then-stringify dance) before signature verification — re-stringifying produces a different byte sequence and the HMAC fails.
+2. **`crypto.timingSafeEqual` for signature comparison.** Never plain string `===` on the hash bytes. Length-check first (`timingSafeEqual` throws on length mismatch); the check is itself constant-time relative to header content.
+3. **5-minute replay window.** Each inbound message / status carries a unix-second timestamp; reject anything outside `±5 min` from `now`. Not crypto-strong (an attacker with a leaked signature can still replay within 5 min) but raises the bar against passive signature leak attacks.
+4. **404 on unknown routing key — no signature check on lookup miss.** Resolve the channel from a routing field in the payload (e.g. `phone_number_id` for WhatsApp) BEFORE signature verification; if the lookup misses, return 404 without ever computing or comparing the HMAC. Returning 401/403 leaks channel existence via response timing.
+5. **Idempotency dedupe by `providerMessageId` before `recordInboundMessage`.** Webhook providers retry on 5xx (sometimes on slow 2xx too). The `Message_tenantId_providerMessageId_idx` composite from Phase 6a serves the lookup.
+6. **No bypass on stub.** The stub channel adapter signs with real HMAC against a real (stub) secret stored in the encrypted credentials envelope. The route's verification path is exercised in dev exactly as it will be in prod — see §3 "stub→real swap" rule.
+7. **Per-message dispatch failure ≠ batch failure.** A malformed message in a batched payload shouldn't cause the whole batch to retry — log the failure, continue. Idempotency catches dupes on retry of the WHOLE batch (which the provider will also do).
+
+### Auth-gated test inspection: forging JWT cookies (NextAuth v5)
+
+NextAuth v5 in this project uses `session.strategy: "jwt"` (see `src/server/auth/config.ts`) — sessions live entirely in a signed JWT cookie, NOT in the `Session` DB table. Inserting a row in `Session` does NOT produce a working auth cookie.
+
+To drive auth-gated pages from `curl` in test/verification scripts (e.g. the Phase 6 verification pass), forge a JWT directly:
+
+1. Look up the user via Prisma.
+2. Use `next-auth/jwt`'s `encode({ token, secret, salt, maxAge })` with `secret = process.env.NEXTAUTH_SECRET` and `salt = "authjs.session-token"` (the dev/HTTP cookie name).
+3. The `token` payload must include `sub`, `id`, `email`, `name`, `isSuperAdmin` — matches the shape the `jwt()` callback emits after a real login, and the shape the `session()` callback in `src/server/auth/config.ts` reads.
+4. Send the result as `Cookie: authjs.session-token=<jwt>` on every request. (HTTPS deployments use `__Secure-authjs.session-token`.)
+
+Dev minted a 24h JWT; the dev server validated it and rendered the auth-gated `/channels` and `/conversations` pages identically to a real session. Useful for CI and curl-based verification harnesses; not committed (the script that does it is a one-off, not infrastructure). Reference: the deleted `scripts/test-phase6-mint-jwt.ts` from the Phase 6 verification pass — pattern only, file no longer in tree.
 
 ### Long-running workers + third-party HTTP clients
 

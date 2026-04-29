@@ -54,7 +54,14 @@ beforeAll(() => {
   vi.stubGlobal("fetch", suiteFetch);
 });
 
-afterAll(() => {
+afterAll(async () => {
+  // Drain pending real-timer setTimeouts. Tests 1+2 schedule 500ms
+  // delivery-callback fetches and don't await them; if those timers
+  // fire AFTER vi.unstubAllGlobals(), the real fetch hits a real
+  // localhost:3000 webhook (which 404s on the bogus phoneNumberId)
+  // and prints noise. The 700ms wait gives every leftover timer a
+  // chance to fire while suiteFetch is still mocked → 200 → silent.
+  await new Promise((r) => setTimeout(r, 700));
   vi.unstubAllGlobals();
   process.chdir(originalCwd);
   try {
