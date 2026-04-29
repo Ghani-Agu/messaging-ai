@@ -28,6 +28,7 @@
     "dev:all": "concurrently -k -n web,worker -c magenta,cyan \"npm:dev\" \"npm:worker\"",
     "queue:ping": "dotenv -e .env.local -- tsx --conditions=react-server scripts/queue-ping.ts",
     "simulate:stale": "dotenv -e .env.local -- tsx --conditions=react-server scripts/simulate-stale-conversation.ts",
+    "verify:phase7": "dotenv -e .env.local -- tsx --conditions=react-server scripts/verify-phase7.ts",
     "widget:dev": "npm --workspace @messaging-ai/widget run dev",
     "widget:build": "npm run widget:check-tokens && npm --workspace @messaging-ai/widget run build",
     "widget:tokens": "tsx scripts/generate-widget-tokens.ts",

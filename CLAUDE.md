@@ -232,7 +232,11 @@ To drive auth-gated pages from `curl` in test/verification scripts (e.g. the Pha
 3. The `token` payload must include `sub`, `id`, `email`, `name`, `isSuperAdmin` — matches the shape the `jwt()` callback emits after a real login, and the shape the `session()` callback in `src/server/auth/config.ts` reads.
 4. Send the result as `Cookie: authjs.session-token=<jwt>` on every request. (HTTPS deployments use `__Secure-authjs.session-token`.)
 
-Dev minted a 24h JWT; the dev server validated it and rendered the auth-gated `/channels` and `/conversations` pages identically to a real session. Useful for CI and curl-based verification harnesses; not committed (the script that does it is a one-off, not infrastructure). Reference: the deleted `scripts/test-phase6-mint-jwt.ts` from the Phase 6 verification pass — pattern only, file no longer in tree.
+Dev minted a 24h JWT; the dev server validated it and rendered the auth-gated `/channels` and `/conversations` pages identically to a real session. Useful for CI and curl-based verification harnesses; not committed (the script that does it is a one-off, not infrastructure). Reference: the deleted `scripts/test-phase6-mint-jwt.ts` from the Phase 6 verification pass — pattern only, file no longer in tree. Phase 7's `scripts/verify-phase7.ts` (next subsection) uses the same JWT-forging pattern in step 8.
+
+### Phase verification harnesses
+
+`scripts/verify-phase7.ts` — 8-step end-to-end check that exercises the full Messenger + Instagram pipeline against stubs. Run via `npm run verify:phase7`. Pre-requisites: dev server running, `.env.local` has `ENCRYPTION_KEY` + `META_VERIFY_TOKEN` + `DEV_WEBHOOK_SIMULATOR=enabled` + `META_USE_STUB` unset or `true`. After real Meta credentials arrive, the same harness validates the real-API integration — swap `META_USE_STUB=false` / `META_APP_ID=<real>` / `META_APP_SECRET=<real>` in `.env.local` and re-run. The script itself is the source of truth for the verification rules; this section is just a discoverability pointer.
 
 ### Long-running workers + third-party HTTP clients
 
