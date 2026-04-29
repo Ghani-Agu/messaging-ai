@@ -236,7 +236,19 @@ export function findCustomerByExternalId(args: {
 }
 
 export type ConversationWithMessages = Conversation & {
-  channel: { id: string; type: ChannelType; displayName: string };
+  channel: {
+    id: string;
+    type: ChannelType;
+    displayName: string;
+    /**
+     * Channel.config JSON, included for the conversation detail header
+     * to read channel-side identifiers — pageName for MESSENGER,
+     * igUsername for INSTAGRAM. Read defensively in the display layer
+     * (src/lib/conversation-display.ts) so a malformed row falls through
+     * to the channel.displayName fallback.
+     */
+    config: Prisma.JsonValue;
+  };
   customer: Customer;
   messages: Message[];
 };
@@ -260,7 +272,9 @@ export async function getConversationWithMessages(args: {
   return prisma.conversation.findFirst({
     where: { id: args.conversationId, tenantId: args.tenantId },
     include: {
-      channel: { select: { id: true, type: true, displayName: true } },
+      channel: {
+        select: { id: true, type: true, displayName: true, config: true },
+      },
       customer: true,
       messages: {
         orderBy: { createdAt: "asc" },

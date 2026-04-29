@@ -15,6 +15,10 @@ import {
 import type { ChannelType, ConversationStatus } from "@prisma/client";
 import { getConversationDetail } from "@/server/conversations/actions";
 import type { ConversationWithMessages } from "@/server/db/conversations";
+import {
+  buildConversationHeaderMetadata,
+  customerDisplayLabel,
+} from "@/lib/conversation-display";
 import { cn } from "@/lib/utils";
 import { DashboardMessageBubble } from "./message-bubble";
 
@@ -124,25 +128,37 @@ function DetailHeader({
   ChannelIcon: LucideIcon;
 }) {
   const escalationReason = readEscalationReason(conversation.metadata);
+  const headerMeta = buildConversationHeaderMetadata({
+    channelType: conversation.channel.type,
+    channelDisplayName: conversation.channel.displayName,
+    channelConfig: conversation.channel.config,
+    customerPhone: conversation.customer.phone,
+    customerExternalId: conversation.customer.externalId,
+  });
   return (
     <header className="mt-3 mb-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-h2 text-[var(--text-primary)]">
-            {customerLabel(conversation.customer)}
+            {customerDisplayLabel({
+              name: conversation.customer.name,
+              externalId: conversation.customer.externalId,
+              channelType: conversation.channel.type,
+            })}
           </h1>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-body-sm text-[var(--text-secondary)]">
             <span className="inline-flex items-center gap-1.5">
               <ChannelIcon aria-hidden className="size-3.5" />
-              {conversation.channel.displayName}
+              {headerMeta.channelLabel}
             </span>
-            <span aria-hidden>·</span>
-            <span className="font-mono text-caption text-[var(--text-tertiary)]">
-              {conversation.channel.type === "WHATSAPP" &&
-              conversation.customer.phone
-                ? conversation.customer.phone
-                : conversation.customer.externalId}
-            </span>
+            {headerMeta.contextLabel ? (
+              <>
+                <span aria-hidden>·</span>
+                <span className="font-mono text-caption text-[var(--text-tertiary)]">
+                  {headerMeta.contextLabel}
+                </span>
+              </>
+            ) : null}
             {conversation.language ? (
               <>
                 <span aria-hidden>·</span>
@@ -257,11 +273,6 @@ function ReadOnlyBanner() {
 function scrollToBottom(el: HTMLDivElement | null): void {
   if (!el) return;
   el.scrollTop = el.scrollHeight;
-}
-
-function customerLabel(c: ConversationWithMessages["customer"]): string {
-  if (c.name && c.name.length > 0) return c.name;
-  return "Anonymous customer";
 }
 
 function readEscalationReason(metadata: unknown): string | null {

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ChevronRight,
+  Facebook,
   Globe,
   Inbox,
   Instagram,
@@ -13,6 +14,10 @@ import {
 import type { ChannelType, ConversationStatus } from "@prisma/client";
 import { listConversations } from "@/server/conversations/actions";
 import type { ConversationListRow } from "@/server/db/conversations";
+import {
+  customerDisplayLabel,
+  customerInitial,
+} from "@/lib/conversation-display";
 import { cn } from "@/lib/utils";
 
 const POLL_INTERVAL_MS = 4000;
@@ -28,7 +33,8 @@ type FilterOption = {
 const FILTERS: FilterOption[] = [
   { value: "WIDGET", label: "Website", icon: Globe, enabled: true },
   { value: "WHATSAPP", label: "WhatsApp", icon: MessageCircle, enabled: true },
-  { value: "INSTAGRAM", label: "Instagram", icon: Instagram, enabled: false, comingInPhase: 7 },
+  { value: "MESSENGER", label: "Messenger", icon: Facebook, enabled: true },
+  { value: "INSTAGRAM", label: "Instagram", icon: Instagram, enabled: true },
 ];
 
 export function ConversationsListClient({
@@ -175,6 +181,11 @@ function ConversationRow({
   row: ConversationListRow;
 }) {
   const lastMessage = row.messages[0] ?? null;
+  const label = customerDisplayLabel({
+    name: row.customer.name,
+    externalId: row.customer.externalId,
+    channelType: row.channel.type,
+  });
   return (
     <Link
       href={`/${slug}/conversations/${row.id}`}
@@ -188,7 +199,7 @@ function ConversationRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate text-body font-medium text-[var(--text-primary)]">
-            {customerLabel(row.customer)}
+            {label}
           </span>
           <ConversationStatusPill status={row.status} />
           {row.language ? <LanguageFlag language={row.language} /> : null}
@@ -232,7 +243,10 @@ function ConversationRow({
 }
 
 function CustomerAvatar({ row }: { row: ConversationListRow }) {
-  const initial = customerInitial(row.customer);
+  const initial = customerInitial({
+    name: row.customer.name,
+    externalId: row.customer.externalId,
+  });
   return (
     <div
       aria-hidden
@@ -313,26 +327,6 @@ function EmptyState() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-function customerLabel(c: ConversationListRow["customer"]): string {
-  if (c.name && c.name.length > 0) return c.name;
-  // External id from the widget is `widget:<browser-uuid>`; truncate the UUID
-  // for legibility while keeping the namespace prefix readable.
-  const id = c.externalId;
-  if (id.length <= 24) return id;
-  return `${id.slice(0, 22)}…`;
-}
-
-function customerInitial(c: ConversationListRow["customer"]): string {
-  if (c.name && c.name.length > 0) {
-    return c.name.charAt(0).toUpperCase();
-  }
-  // Take the first character after the namespace prefix if present.
-  const id = c.externalId;
-  const colonIdx = id.indexOf(":");
-  const candidate = colonIdx >= 0 ? id.slice(colonIdx + 1) : id;
-  return candidate.charAt(0).toUpperCase() || "?";
-}
 
 function formatRelative(d: Date): string {
   const now = Date.now();
