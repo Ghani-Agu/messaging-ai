@@ -4,9 +4,17 @@ import type { Channel, ChannelStatus, Prisma } from "@prisma/client";
 import { prisma } from "./client";
 import {
   parseWidgetChannelConfig,
+  type WhatsAppChannelConfig,
+  type WhatsAppCredentials,
   type WidgetChannelConfig,
   WIDGET_PUBLIC_KEY_REGEX,
 } from "@/lib/validators";
+import {
+  encryptCredentials,
+  decryptCredentials,
+  isEncryptedCredentials,
+  type EncryptedCredentials,
+} from "@/server/channels/credentials";
 
 /**
  * Phase-6 Channel DB helper layer. All app code (routes, Server Actions,
@@ -217,3 +225,122 @@ export async function updateChannelStatus(
     data: { status },
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WhatsApp channel CRUD (Phase 6e)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Mint a fresh HMAC webhook secret. 32 bytes hex-encoded (64 chars) —
+ * comfortably above 360dialog's minimum and matches the format we're
+ * already using in dev for stub channels.
+ */
+export function mintWhatsAppWebhookSecret(): string {
+  return randomBytes(32).toString("hex");
+}
+
+/** The (single) WHATSAPP channel for a tenant. Null if none yet. */
+export function getWhatsAppChannel(
+  tenantId: string,
+): Promise<Channel | null> {
+  return prisma.channel.findUnique({
+    where: { tenantId_type: { tenantId, type: "WHATSAPP" } },
+  });
+}
+
+/**
+ * Read + decrypt a WhatsApp channel's credentials. Throws if the row's
+ * credentials column isn't a well-formed encrypted envelope, or if the
+ * envelope can't be decrypted (key mismatch / tampering). Caller-side
+ * try/catch is expected — failures here mean the operator needs to
+ * re-paste credentials.
+ */
+export function decryptWhatsAppCredentials(
+  channel: Channel,
+): WhatsAppCredentials {
+  if (!isEncryptedCredentials(channel.credentials)) {
+    throw new Error(
+      `decryptWhatsAppCredentials: channel ${channel.id} credentials are not encrypted`,
+    );
+  }
+  return decryptCredentials<WhatsAppCredentials>(channel.credentials);
+}
+
+/**
+ * Idempotent create-or-update of a tenant's WhatsApp channel.
+ *
+ * On first call (no row exists): mints a fresh webhookSecret, encrypts
+ * the credentials envelope, creates the row CONNECTED.
+ *
+ * On subsequent calls (row exists): preserves the existing webhookSecret
+ * unless the caller explicitly passes a fresh one (rotate path), and
+ * preserves any field the caller doesn't pass.
+ *
+ * Throws on cross-tenant phoneNumberId collision (Postgres P2002 on
+ * Channel_whatsapp_phoneNumberId_unique). The caller maps this to a
+ * user-facing "phone number is already connected to another workspace"
+ * message — see src/server/channels/whatsapp/actions.ts.
+ */
+export async function upsertWhatsAppChannel(args: {
+  tenantId: string;
+  config: WhatsAppChannelConfig;
+  credentials: WhatsAppCredentials;
+}): Promise<Channel> {
+  const existing = await getWhatsAppChannel(args.tenantId);
+  const encrypted = encryptCredentials(args.credentials);
+  const displayName = args.config.displayName ?? "WhatsApp";
+
+  if (existing) {
+    return prisma.channel.update({
+      where: { id: existing.id },
+      data: {
+        displayName,
+        config: args.config as unknown as Prisma.InputJsonValue,
+        credentials: encrypted as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+  return prisma.channel.create({
+    data: {
+      tenantId: args.tenantId,
+      type: "WHATSAPP",
+      displayName,
+      status: "CONNECTED",
+      config: args.config as unknown as Prisma.InputJsonValue,
+      credentials: encrypted as unknown as Prisma.InputJsonValue,
+    },
+  });
+}
+
+/**
+ * Replace the WhatsApp channel's webhookSecret with a fresh one,
+ * preserving the apiToken. Used by the channels page "Rotate secret"
+ * button. Returns the new secret so the UI can render the value the
+ * operator must paste back into 360dialog's dashboard.
+ */
+export async function rotateWhatsAppWebhookSecret(
+  tenantId: string,
+): Promise<{ webhookSecret: string }> {
+  const existing = await getWhatsAppChannel(tenantId);
+  if (!existing) {
+    throw new Error(
+      `rotateWhatsAppWebhookSecret: no WhatsApp channel for tenant ${tenantId}`,
+    );
+  }
+  const current = decryptWhatsAppCredentials(existing);
+  const nextSecret = mintWhatsAppWebhookSecret();
+  const encrypted = encryptCredentials({
+    ...current,
+    webhookSecret: nextSecret,
+  });
+  await prisma.channel.update({
+    where: { id: existing.id },
+    data: {
+      credentials: encrypted as unknown as Prisma.InputJsonValue,
+    },
+  });
+  return { webhookSecret: nextSecret };
+}
+
+// Re-export for downstream consumers that want the EncryptedCredentials shape.
+export { type EncryptedCredentials };

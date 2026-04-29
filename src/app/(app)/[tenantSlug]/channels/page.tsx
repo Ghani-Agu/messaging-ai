@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Globe, Instagram, MessageCircle } from "lucide-react";
 import { getTenantContext } from "@/server/tenancy/context";
-import { getWidgetChannel } from "@/server/db/channels";
+import { getWhatsAppChannel, getWidgetChannel } from "@/server/db/channels";
 import {
   ChannelRow,
   type ChannelRowStatus,
@@ -18,7 +18,10 @@ export default async function ChannelsPage({
 }) {
   const { tenantSlug } = await params;
   const ctx = await getTenantContext(tenantSlug);
-  const widget = await getWidgetChannel(ctx.tenant.id);
+  const [widget, whatsapp] = await Promise.all([
+    getWidgetChannel(ctx.tenant.id),
+    getWhatsAppChannel(ctx.tenant.id),
+  ]);
 
   let widgetStatus: ChannelRowStatus = "available";
   if (widget) {
@@ -27,6 +30,15 @@ export default async function ChannelsPage({
   const widgetDescription = widget
     ? "Embedded chat for your website. Configure origins, theme, and key."
     : "Embedded chat for your website. Enable to mint a public key and embed snippet.";
+
+  let whatsappStatus: ChannelRowStatus = "available";
+  if (whatsapp) {
+    whatsappStatus =
+      whatsapp.status === "CONNECTED" ? "connected" : "paused";
+  }
+  const whatsappDescription = whatsapp
+    ? "Connected via 360dialog. Configure display, rotate webhook secret, or pause."
+    : "Connect your 360dialog number for two-way WhatsApp Business messaging.";
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10 lg:py-14">
@@ -52,8 +64,9 @@ export default async function ChannelsPage({
           <ChannelRow
             icon={MessageCircle}
             name="WhatsApp"
-            description="Connect your 360dialog number for two-way WhatsApp Business messaging."
-            comingInPhase={6}
+            description={whatsappDescription}
+            status={whatsappStatus}
+            href={`/${tenantSlug}/channels/whatsapp`}
           />
         </li>
         <li>
