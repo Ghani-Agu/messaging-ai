@@ -12,6 +12,7 @@ import {
   getSource,
   insertChunksWithoutEmbeddings,
   listSourcesForTenant,
+  markSourceVerified,
   maybeMarkSourceReady,
   type SourceSummary,
   updateSourceStatus,
@@ -352,6 +353,19 @@ export async function runRetrieval(
   const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
   const { query, topK } = retrievalQuerySchema.parse(input);
   return retrieve({ tenantId: ctx.tenant.id, query, topK });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Freshness — Phase 8g operator-asserted "still correct" stamp.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function markSourceVerifiedAction(
+  slug: string,
+  input: { sourceId: string },
+): Promise<{ ok: true }> {
+  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  await markSourceVerified({ tenantId: ctx.tenant.id, sourceId: input.sourceId });
+  return { ok: true };
 }
 
 export async function deleteSource(

@@ -28,9 +28,11 @@ import {
   deleteSource as deleteSourceAction,
   finalizeFileUpload,
   listSources,
+  markSourceVerifiedAction,
   reingestSource,
 } from "@/server/knowledge/actions";
 import type { SourceSummary } from "@/server/db/knowledge";
+import { DOCUMENT_STALE_AFTER_DAYS } from "@/server/knowledge/limits";
 import { RetrievalTestPanel } from "./retrieval-test-panel";
 
 const TYPE_ICON = {
@@ -74,6 +76,25 @@ function relTime(d: Date | string | null): string {
 
 function isInProgress(s: SourceSummary): boolean {
   return s.status === "PENDING" || s.status === "PROCESSING";
+}
+
+/**
+ * Phase 8g freshness signal. A source is "stale" when both lastIngestedAt
+ * and lastVerifiedAt are older than DOCUMENT_STALE_AFTER_DAYS (45). The
+ * operator clears the badge by clicking "Mark verified today" (sets
+ * lastVerifiedAt = now()), distinct from re-ingest which re-runs the
+ * crawl/parse.
+ */
+function isStale(s: SourceSummary): boolean {
+  if (s.status !== "READY") return false; // don't tag in-flight or errored sources
+  const cutoffMs = Date.now() - DOCUMENT_STALE_AFTER_DAYS * 24 * 60 * 60 * 1000;
+  const lastIngestedMs = s.lastIngestedAt
+    ? new Date(s.lastIngestedAt).getTime()
+    : 0;
+  const lastVerifiedMs = s.lastVerifiedAt
+    ? new Date(s.lastVerifiedAt).getTime()
+    : 0;
+  return Math.max(lastIngestedMs, lastVerifiedMs) < cutoffMs;
 }
 
 type Props = {
@@ -231,7 +252,17 @@ function SourcesTable({
                   ) : null}
                 </td>
                 <td className="px-4 py-3">
-                  <StatusPill status={r.status} />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatusPill status={r.status} />
+                    {isStale(r) ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 py-0.5 text-caption text-[var(--warning)]"
+                        title={`Older than ${DOCUMENT_STALE_AFTER_DAYS} days. Re-ingest to refresh content, or click "Mark verified today" to confirm it's still accurate.`}
+                      >
+                        stale
+                      </span>
+                    ) : null}
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums text-[var(--text-secondary)]">
                   {r.chunkCount}
@@ -260,7 +291,9 @@ function RowActions({
   sourceId: string;
   onChange: () => void;
 }) {
-  const [busy, setBusy] = React.useState<"reingest" | "delete" | null>(null);
+  const [busy, setBusy] = React.useState<
+    "reingest" | "delete" | "verify" | null
+  >(null);
 
   const handleReingest = async () => {
     setBusy("reingest");
@@ -269,6 +302,18 @@ function RowActions({
       onChange();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Re-ingest failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleVerify = async () => {
+    setBusy("verify");
+    try {
+      await markSourceVerifiedAction(slug, { sourceId });
+      onChange();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Mark verified failed");
     } finally {
       setBusy(null);
     }
@@ -289,6 +334,21 @@ function RowActions({
 
   return (
     <div className="flex justify-end gap-1">
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={busy !== null}
+        onClick={handleVerify}
+        aria-label="Mark as verified today"
+        title="Mark as verified today — clears the stale badge without re-ingesting"
+      >
+        <CheckCircle2
+          className={cn(
+            "h-3.5 w-3.5",
+            busy === "verify" && "animate-pulse",
+          )}
+        />
+      </Button>
       <Button
         variant="ghost"
         size="sm"

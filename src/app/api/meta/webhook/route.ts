@@ -25,6 +25,7 @@ import {
   type MessageAiMetadata,
 } from "@/server/db/conversations";
 import { runBrain } from "@/server/ai/orchestrator";
+import { logGapIfOutsideScope } from "@/server/knowledge/gap-logger";
 import { getMessengerClient } from "@/server/channels/messenger/client";
 import { getInstagramClient } from "@/server/channels/instagram/client";
 import { readMetaCredentials } from "@/server/channels/meta/credentials";
@@ -391,6 +392,13 @@ async function dispatchInboundMessage(args: {
       reason: result.escalation,
     });
   }
+  // Phase 8g-2 / Gate-1 K6: caller-side, fire-and-forget gap log.
+  void logGapIfOutsideScope({
+    tenantId: channel.tenantId,
+    conversationId: conversation.id,
+    customerMessage: inbound.content,
+    brainResult: result,
+  });
 }
 
 function jsonError(status: number, error: string): Response {

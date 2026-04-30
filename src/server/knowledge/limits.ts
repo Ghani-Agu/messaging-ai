@@ -58,6 +58,19 @@ export const DOCUMENT_STALE_AFTER_DAYS = 45;
 // candidates and either joins an existing cluster (when best similarity
 // > GAP_CLUSTER_THRESHOLD) or starts a new sole-member cluster.
 //
+// THRESHOLD = 0.75 (looser than Q&A's same-language 0.85). Empirical
+// finding from the P8g smoke: Voyage `voyage-3-large` produces
+// similarity ~0.78 for phrasing-variant questions about the same
+// intent (e.g. "when do you ship orders?" vs "what are your delivery
+// times?"). Clustering deserves a looser threshold than Q&A
+// authoritative-match for two reasons:
+//   1. False positives in gap clusters are LOW cost — operators just
+//      see a few unrelated gaps lumped together; they can still read
+//      each one and react.
+//   2. False positives in Q&A authoritative-match are HIGH cost — the
+//      brain reuses the wrong answer near-verbatim, surfacing as a
+//      bad customer reply.
+//
 // Hard cap on candidate set per insert — protects against O(N) per-gap
 // blow-up when a tenant has high gap volume. When the in-window set
 // exceeds this cap, clustering is skipped for the new gap (clusterKey
@@ -67,7 +80,7 @@ export const DOCUMENT_STALE_AFTER_DAYS = 45;
 //
 // Window (30 days) bounds the digest period — older gaps fall out of
 // scope so the dashboard doesn't accumulate stale entries.
-export const GAP_CLUSTER_THRESHOLD = 0.85;
+export const GAP_CLUSTER_THRESHOLD = 0.75;
 export const GAP_CLUSTER_CANDIDATE_CAP = 500;
 export const GAP_CLUSTER_WINDOW_DAYS = 30;
 

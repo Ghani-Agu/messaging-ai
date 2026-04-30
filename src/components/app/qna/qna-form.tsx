@@ -33,10 +33,13 @@ type FormState = {
   sourceUrl: string;
 };
 
-function initialFromRow(row: QnaPair | null): FormState {
+function initialFromRow(
+  row: QnaPair | null,
+  initialQuestion?: string,
+): FormState {
   if (!row) {
     return {
-      question: "",
+      question: initialQuestion ?? "",
       answer: "",
       language: "",
       languageLock: false,
@@ -73,14 +76,21 @@ function toInput(s: FormState): QnaPairInput {
 
 export function QnaForm({
   initial,
+  initialQuestion,
   onSubmit,
   onCancel,
 }: {
   initial: QnaPair | null;
+  /**
+   * Pre-fill the question field when creating a new Q&A. Used by the
+   * "Create Q&A from gap" CTA in the knowledge-gaps digest, which seeds
+   * the form with the gap's representative question.
+   */
+  initialQuestion?: string;
   onSubmit: (input: QnaPairInput) => void | Promise<void>;
   onCancel: () => void;
 }) {
-  const [s, setS] = useState<FormState>(initialFromRow(initial));
+  const [s, setS] = useState<FormState>(initialFromRow(initial, initialQuestion));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isEdit = initial !== null;

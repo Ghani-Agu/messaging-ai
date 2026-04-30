@@ -79,6 +79,11 @@ export type SourceSummary = {
   progress: Prisma.JsonValue;
   metadata: Prisma.JsonValue;
   lastIngestedAt: Date | null;
+  /** Phase 8g: operator-asserted "still correct" timestamp. Distinct from
+   * lastIngestedAt — a verify is a no-op against the corpus, just a
+   * freshness signal. The stale badge in the documents list fires when
+   * max(lastIngestedAt, lastVerifiedAt) is older than DOCUMENT_STALE_AFTER_DAYS. */
+  lastVerifiedAt: Date | null;
   createdAt: Date;
   chunkCount: number;
 };
@@ -97,6 +102,7 @@ export async function listSourcesForTenant(tenantId: string): Promise<SourceSumm
       progress: Prisma.JsonValue;
       metadata: Prisma.JsonValue;
       lastIngestedAt: Date | null;
+      lastVerifiedAt: Date | null;
       createdAt: Date;
       chunkCount: bigint;
     }>
@@ -110,6 +116,7 @@ export async function listSourcesForTenant(tenantId: string): Promise<SourceSumm
            s."progress",
            s."metadata",
            s."lastIngestedAt",
+           s."lastVerifiedAt",
            s."createdAt",
            COALESCE(c.cnt, 0) AS "chunkCount"
       FROM "KnowledgeSource" s
@@ -135,6 +142,24 @@ export async function deleteSource(args: {
   await prisma.knowledgeSource.deleteMany({
     where: { id: args.sourceId, tenantId: args.tenantId },
   });
+}
+
+/**
+ * Operator-asserted "still correct" stamp (Phase 8g freshness UI).
+ * Distinct from lastIngestedAt — a verify doesn't re-run the crawl /
+ * parse, it just records that the operator looked at the rendered
+ * source and confirmed it's still accurate. Surfaces in the documents
+ * list as "stale" / "fresh" badge logic per DOCUMENT_STALE_AFTER_DAYS.
+ */
+export async function markSourceVerified(args: {
+  tenantId: string;
+  sourceId: string;
+}): Promise<void> {
+  const result = await prisma.knowledgeSource.updateMany({
+    where: { id: args.sourceId, tenantId: args.tenantId },
+    data: { lastVerifiedAt: new Date() },
+  });
+  if (result.count === 0) throw new Error("Source not found");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

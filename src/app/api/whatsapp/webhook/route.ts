@@ -24,6 +24,7 @@ import {
   type MessageAiMetadata,
 } from "@/server/db/conversations";
 import { runBrain } from "@/server/ai/orchestrator";
+import { logGapIfOutsideScope } from "@/server/knowledge/gap-logger";
 
 /**
  * POST /api/whatsapp/webhook — single ingress for 360dialog (Meta-shape)
@@ -298,4 +299,12 @@ async function dispatchInboundMessage(args: {
       reason: result.escalation,
     });
   }
+  // Phase 8g-2 / Gate-1 K6: caller-side, fire-and-forget. logGapIfOutsideScope
+  // is a no-op for non-OUTSIDE_SCOPE replies and never throws.
+  void logGapIfOutsideScope({
+    tenantId: channel.tenantId,
+    conversationId: conversation.id,
+    customerMessage: inbound.content,
+    brainResult: result,
+  });
 }

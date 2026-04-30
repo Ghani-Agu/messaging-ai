@@ -7,6 +7,7 @@ import {
   Building2,
   CreditCard,
   Database,
+  HelpCircle,
   LayoutDashboard,
   MessageSquare,
   MessageSquareText,
@@ -46,6 +47,8 @@ const ITEMS: NavItem[] = [
   { href: (s) => `/${s}/knowledge/business-info`, label: "Business Info", icon: Building2, phase: 8 },
   // Type 4 — placeholder until the action framework lands.
   { href: (s) => `/${s}/knowledge/live-data`, label: "Live Data Sources", icon: Database, phase: 8 },
+  // Knowledge gap digest — operator-facing maintenance surface (P8g).
+  { href: (s) => `/${s}/knowledge/gaps`, label: "Knowledge Gaps", icon: HelpCircle, phase: 8 },
   { href: (s) => `/${s}/channels`, label: "Channels", icon: Plug, phase: 5 },
   { href: (s) => `/${s}/playground`, label: "Playground", icon: Sparkles, phase: 4 },
   { href: (s) => `/${s}/settings`, label: "Settings", icon: Settings },

@@ -14,6 +14,7 @@ import {
   type MessageAiMetadata,
 } from "@/server/db/conversations";
 import { runBrainStream, type BrainResult } from "@/server/ai/orchestrator";
+import { logGapIfOutsideScope } from "@/server/knowledge/gap-logger";
 
 /**
  * POST /api/widget/messages — single ingress for widget messages.
@@ -196,6 +197,13 @@ export async function POST(req: Request): Promise<Response> {
             reason: lastResult.escalation,
           });
         }
+        // Phase 8g-2 / Gate-1 K6: caller-side, fire-and-forget gap log.
+        void logGapIfOutsideScope({
+          tenantId,
+          conversationId,
+          customerMessage: userMessage,
+          brainResult: lastResult,
+        });
 
         send({
           type: "done",

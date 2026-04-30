@@ -38,6 +38,12 @@ vi.mock("@/server/ai/orchestrator", () => ({
   runBrain: vi.fn(),
 }));
 
+// Phase 8g-2: gap-logger transitively imports queue/jobs which trips
+// REDIS_URL on module-load in tests. Stub the no-op caller.
+vi.mock("@/server/knowledge/gap-logger", () => ({
+  logGapIfOutsideScope: vi.fn(async () => {}),
+}));
+
 vi.mock("@/server/channels/messenger/client", () => ({
   getMessengerClient: vi.fn(() => ({
     sendMessage: vi.fn(),

@@ -19,6 +19,7 @@ vi.mock("@/server/ai/embeddings", () => ({
   embed: vi.fn(async () => ({
     vectors: [[0.1, 0.2, 0.3]],
     provider: "voyage" as const,
+    model: "voyage-3-large",
   })),
 }));
 
@@ -120,6 +121,7 @@ beforeEach(() => {
   vi.mocked(embed).mockResolvedValue({
     vectors: [STUB_VECTOR],
     provider: "voyage" as const,
+    model: "voyage-3-large",
   });
   // Default $queryRaw stub: returns the gap's stored embedding text when
   // runClusterStep re-reads the vector.
