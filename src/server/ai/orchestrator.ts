@@ -124,6 +124,13 @@ export type BrainCitation =
       question: string;
       preview: string;
       score: number;
+      /**
+       * Phase 8e-3: true when the match fired below the same-language
+       * threshold (cross-language relaxed path). Surfaced as a small
+       * indicator in the conversations dashboard so operators can spot
+       * cross-language false positives during reviews.
+       */
+      crossLanguageMatch: boolean;
     }
   | {
       index: number;
@@ -311,6 +318,7 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
       question: qa.question,
       preview: qa.answer.slice(0, 240),
       score: qa.score,
+      crossLanguageMatch: qa.crossLanguageMatch,
     });
   }
 

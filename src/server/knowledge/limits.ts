@@ -51,11 +51,27 @@ export const MAX_QNA_PER_TENANT = 1_000;
 // staleness; verification is purely operator-driven.
 export const DOCUMENT_STALE_AFTER_DAYS = 45;
 
-// Q&A authoritative-match threshold. Cosine-similarity floor on the
-// question embedding. Matches above this floor are injected into Block C
-// as "AUTHORITATIVE ANSWER" and the brain reuses the answer near-verbatim
-// (only language-register-adapting). Below the floor, the question falls
-// through to normal hybrid retrieval. Per Gate 1 K3: 0.85 (override of the
-// originally proposed 0.82 — tighter for safety). No auto-skip yet; brain
-// still composes the reply. Wired into the retriever in P8e.
+// Q&A authoritative-match thresholds — two-tier (Phase 8e-3 override).
+//
+// Cosine-similarity floor on the question embedding. Matches above the
+// floor are injected into Block C as "AUTHORITATIVE ANSWER" and the
+// brain reuses the answer near-verbatim (only language-register-adapting).
+//
+// SAME-language threshold: 0.85 (Gate-1 K3 — tighter for safety).
+//   When the customer's detected language equals the Q&A's `language`,
+//   we require high confidence that the questions are the same.
+//
+// CROSS-language threshold: 0.65 (Gate-1 P8e-3 override).
+//   Voyage `voyage-3-large` produces lower cosine similarity for
+//   semantically-equivalent questions across language pairs (verified by
+//   the P8e smoke: AR ↔ FR for "delivery times" scored < 0.85). 0.65 lets
+//   cross-language matches fire while preserving the same-language safety
+//   floor. Citations from the cross-language path get
+//   `crossLanguageMatch: true` so the conversations dashboard can flag
+//   them for operator review.
+//
+// LANGUAGE-LOCK filter applies on top of both thresholds: a Q&A with
+// `languageLock: true` only matches when languages are equal, regardless
+// of score. The two-tier threshold doesn't loosen the lock.
 export const QNA_MATCH_THRESHOLD = 0.85;
+export const QNA_CROSS_LANGUAGE_THRESHOLD = 0.65;

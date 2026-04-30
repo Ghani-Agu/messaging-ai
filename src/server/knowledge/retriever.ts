@@ -13,6 +13,7 @@ import {
 } from "@/server/db/items";
 import { vectorSearchQna } from "@/server/db/qna";
 import {
+  QNA_CROSS_LANGUAGE_THRESHOLD,
   QNA_MATCH_THRESHOLD,
   RETRIEVAL_CANDIDATE_POOL,
   RETRIEVAL_DEFAULT_TOP_K,
@@ -250,36 +251,58 @@ export type RetrievedQna = {
   languageLock: boolean;
   tags: string[];
   score: number; // cosine similarity
+  /**
+   * Phase 8e-3: true when the match fired below the same-language safety
+   * threshold (i.e., via the cross-language relaxed threshold). Surfaced
+   * in the conversations dashboard so operators can spot any false
+   * positives crossing languages.
+   *
+   * Specifically: `score < QNA_MATCH_THRESHOLD` (0.85). At-or-above the
+   * same-language floor is high confidence regardless of which language
+   * pair fired, so we don't flag those even when languages differ.
+   */
+  crossLanguageMatch: boolean;
 };
 
 /**
- * Retrieve Q&A matches above the threshold for the customer's question.
+ * Retrieve Q&A matches for the customer's question. Two-tier threshold
+ * (Phase 8e-3) with the language-lock filter applied on top:
  *
- * Two filters apply:
- *   1. score >= threshold (default QNA_MATCH_THRESHOLD = 0.85 per Gate-1
- *      K3 — tightened from the originally proposed 0.82). Below this floor,
- *      the question falls through to normal hybrid retrieval; the brain
- *      doesn't see a Q&A injection.
- *   2. languageLock filter: if a Q&A row has languageLock=true, it only
- *      matches when `detectedLanguage` equals the row's `language`. When
- *      languageLock=false (the default), the Q&A applies cross-language
- *      and the brain handles register-translation in the reply.
+ *   1. THRESHOLD selection per candidate:
+ *        - Same-language (h.language === detectedLanguage, both non-null):
+ *          QNA_MATCH_THRESHOLD (0.85) — high-confidence safety floor.
+ *        - Otherwise (different languages, or either is null):
+ *          QNA_CROSS_LANGUAGE_THRESHOLD (0.65) — Voyage's multilingual
+ *          embedding produces lower cosine similarity across languages,
+ *          so we relax the floor. Matches that fire here are flagged
+ *          `crossLanguageMatch: true` for dashboard auditing.
+ *      Below the applicable threshold the question falls through to
+ *      normal hybrid retrieval; the brain doesn't see a Q&A injection.
+ *
+ *   2. LANGUAGE-LOCK filter (independent, hard): if a Q&A row has
+ *      languageLock=true, it only matches when languages are equal,
+ *      regardless of score. The two-tier threshold doesn't loosen the
+ *      lock — locked Q&A is still cross-language-blocked.
  *
  * Returns up to `topK` matches sorted by score descending. The orchestrator
- * typically takes the top-1 match for authoritative-answer injection; the
- * full list is available for debug / future multi-Q&A blending.
+ * typically takes the top-1 match for authoritative-answer injection.
  */
 export async function retrieveQnaMatches(args: {
   tenantId: string;
   query: string;
   queryVector?: number[];
+  /** Override the same-language threshold (default QNA_MATCH_THRESHOLD = 0.85). */
   threshold?: number;
+  /** Override the cross-language threshold (default QNA_CROSS_LANGUAGE_THRESHOLD = 0.65). */
+  crossLanguageThreshold?: number;
   detectedLanguage?: SupportedLanguage;
   topK?: number;
 }): Promise<RetrievedQna[]> {
   const trimmed = args.query.trim();
   if (!trimmed) return [];
-  const threshold = args.threshold ?? QNA_MATCH_THRESHOLD;
+  const sameLanguageThreshold = args.threshold ?? QNA_MATCH_THRESHOLD;
+  const crossLanguageThreshold =
+    args.crossLanguageThreshold ?? QNA_CROSS_LANGUAGE_THRESHOLD;
   const topK = args.topK ?? 5;
 
   const { vector } = await ensureQueryVector(trimmed, args.queryVector);
@@ -295,10 +318,32 @@ export async function retrieveQnaMatches(args: {
 
   const filtered: RetrievedQna[] = [];
   for (const h of hits) {
-    if (h.score < threshold) continue;
+    // Hard filter: language lock blocks cross-language matches regardless
+    // of score. Applied first so a low-score locked candidate doesn't even
+    // get its threshold computed.
     if (h.languageLock && h.language && args.detectedLanguage) {
       if (h.language !== args.detectedLanguage) continue;
     }
+
+    // Determine which threshold applies. Same-language requires both the
+    // Q&A's declared language and the detected language to be non-null
+    // and equal; everything else (mismatch, either side null) is treated
+    // as cross-language and gets the relaxed floor.
+    const sameLanguage =
+      !!h.language &&
+      !!args.detectedLanguage &&
+      h.language === args.detectedLanguage;
+    const threshold = sameLanguage
+      ? sameLanguageThreshold
+      : crossLanguageThreshold;
+
+    if (h.score < threshold) continue;
+
+    // Mark cross-language when the match fired below the same-language
+    // safety floor — that's the operator-meaningful "this match required
+    // relaxation" signal, regardless of which language pair fired.
+    const crossLanguageMatch = h.score < sameLanguageThreshold;
+
     filtered.push({
       qnaId: h.qnaId,
       question: h.question,
@@ -307,6 +352,7 @@ export async function retrieveQnaMatches(args: {
       languageLock: h.languageLock,
       tags: h.tags,
       score: h.score,
+      crossLanguageMatch,
     });
     if (filtered.length >= topK) break;
   }

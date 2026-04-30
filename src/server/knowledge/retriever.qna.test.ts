@@ -12,8 +12,9 @@ vi.mock("@/server/db/qna", () => ({
   vectorSearchQna: vi.fn(),
 }));
 
-// retriever.ts imports from db/items for items search too — provide a no-op
-// mock so importing retriever doesn't pull a real DB client transitively.
+// retriever.ts imports from db/items + db/knowledge for items + chunks
+// search too — provide no-op mocks so importing retriever doesn't pull
+// a real DB client transitively.
 vi.mock("@/server/db/items", () => ({
   vectorSearchItems: vi.fn(),
   lexicalSearchItems: vi.fn(),
@@ -26,7 +27,10 @@ vi.mock("@/server/db/knowledge", () => ({
 
 import { vectorSearchQna } from "@/server/db/qna";
 import { retrieveQnaMatches } from "./retriever";
-import { QNA_MATCH_THRESHOLD } from "./limits";
+import {
+  QNA_CROSS_LANGUAGE_THRESHOLD,
+  QNA_MATCH_THRESHOLD,
+} from "./limits";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -51,85 +55,182 @@ const mkHit = (overrides: {
   score: overrides.score,
 });
 
-describe("retrieveQnaMatches — threshold filtering", () => {
-  it("includes hits at or above the default threshold (0.85)", async () => {
+// ─────────────────────────────────────────────────────────────────────────────
+// Two-tier threshold (Phase 8e-3)
+//
+// SAME-language: 0.85 floor.
+// CROSS-language: 0.65 floor.
+// crossLanguageMatch flag: true when match fires below 0.85, regardless
+// of which language pair produced it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("retrieveQnaMatches — same-language path (0.85 floor)", () => {
+  it("fires when score is at or above 0.85; crossLanguageMatch=false", async () => {
     vi.mocked(vectorSearchQna).mockResolvedValue([
-      mkHit({ qnaId: "high", score: 0.92 }),
-      mkHit({ qnaId: "right-at", score: QNA_MATCH_THRESHOLD }),
-      mkHit({ qnaId: "low", score: 0.7 }),
+      mkHit({ qnaId: "high", score: 0.92, language: "fr" }),
+      mkHit({ qnaId: "right-at", score: QNA_MATCH_THRESHOLD, language: "fr" }),
     ]);
     const r = await retrieveQnaMatches({
       tenantId: "t",
-      query: "what are your hours?",
+      query: "x",
+      detectedLanguage: "fr",
     });
+    expect(r).toHaveLength(2);
     expect(r.map((m) => m.qnaId)).toEqual(["high", "right-at"]);
+    for (const m of r) {
+      expect(m.crossLanguageMatch).toBe(false);
+    }
   });
 
-  it("respects a caller-supplied threshold override", async () => {
+  it("does NOT fire below 0.85 — safety floor preserved", async () => {
     vi.mocked(vectorSearchQna).mockResolvedValue([
-      mkHit({ qnaId: "top", score: 0.65 }),
-      mkHit({ qnaId: "mid", score: 0.55 }),
-      mkHit({ qnaId: "below", score: 0.4 }),
+      mkHit({ qnaId: "below", score: 0.84, language: "fr" }),
+      mkHit({ qnaId: "well-below", score: 0.7, language: "fr" }),
     ]);
     const r = await retrieveQnaMatches({
       tenantId: "t",
-      query: "hi",
-      threshold: 0.5,
+      query: "x",
+      detectedLanguage: "fr",
     });
-    expect(r.map((m) => m.qnaId)).toEqual(["top", "mid"]);
-  });
-
-  it("returns empty when no hit clears threshold", async () => {
-    vi.mocked(vectorSearchQna).mockResolvedValue([
-      mkHit({ qnaId: "a", score: 0.5 }),
-      mkHit({ qnaId: "b", score: 0.4 }),
-    ]);
-    const r = await retrieveQnaMatches({ tenantId: "t", query: "x" });
     expect(r).toEqual([]);
   });
 });
 
-describe("retrieveQnaMatches — language-lock filtering", () => {
-  it("drops language-locked rows whose language differs from detectedLanguage", async () => {
+describe("retrieveQnaMatches — cross-language path (0.65 floor)", () => {
+  it("fires when score is at or above 0.65 across languages; crossLanguageMatch=true", async () => {
     vi.mocked(vectorSearchQna).mockResolvedValue([
-      mkHit({ qnaId: "fr-locked", score: 0.95, language: "fr", languageLock: true }),
-      mkHit({ qnaId: "ar-locked", score: 0.95, language: "ar", languageLock: true }),
-      mkHit({ qnaId: "unlocked-fr", score: 0.95, language: "fr", languageLock: false }),
+      mkHit({ qnaId: "mid", score: 0.75, language: "fr", languageLock: false }),
+      mkHit({ qnaId: "right-at", score: QNA_CROSS_LANGUAGE_THRESHOLD, language: "fr", languageLock: false }),
+    ]);
+    const r = await retrieveQnaMatches({
+      tenantId: "t",
+      query: "x",
+      detectedLanguage: "ar", // different from fr → cross-language path
+    });
+    expect(r).toHaveLength(2);
+    expect(r.map((m) => m.qnaId)).toEqual(["mid", "right-at"]);
+    for (const m of r) {
+      expect(m.crossLanguageMatch).toBe(true);
+    }
+  });
+
+  it("does NOT fire below 0.65 across languages", async () => {
+    vi.mocked(vectorSearchQna).mockResolvedValue([
+      mkHit({ qnaId: "below", score: 0.64, language: "fr" }),
+      mkHit({ qnaId: "well-below", score: 0.4, language: "fr" }),
     ]);
     const r = await retrieveQnaMatches({
       tenantId: "t",
       query: "x",
       detectedLanguage: "ar",
     });
-    // fr-locked dropped (lang mismatch). ar-locked kept (lang match).
-    // unlocked-fr kept regardless (lock off).
-    expect(r.map((m) => m.qnaId).sort()).toEqual(["ar-locked", "unlocked-fr"]);
+    expect(r).toEqual([]);
   });
 
-  it("keeps language-locked rows when detectedLanguage is omitted (no filter)", async () => {
+  it("treats null language on the Q&A as cross-language (relaxed floor)", async () => {
     vi.mocked(vectorSearchQna).mockResolvedValue([
-      mkHit({ qnaId: "fr-locked", score: 0.95, language: "fr", languageLock: true }),
-    ]);
-    const r = await retrieveQnaMatches({ tenantId: "t", query: "x" });
-    // No detectedLanguage means we don't filter. Caller is responsible
-    // for either passing the language or accepting cross-language matches.
-    expect(r.map((m) => m.qnaId)).toEqual(["fr-locked"]);
-  });
-
-  it("keeps unlocked rows regardless of language", async () => {
-    vi.mocked(vectorSearchQna).mockResolvedValue([
-      mkHit({ qnaId: "unlocked", score: 0.9, language: "fr", languageLock: false }),
+      mkHit({ qnaId: "no-lang", score: 0.7, language: null }),
     ]);
     const r = await retrieveQnaMatches({
       tenantId: "t",
       query: "x",
-      detectedLanguage: "ar", // mismatch but lock is off
+      detectedLanguage: "fr",
     });
-    expect(r.map((m) => m.qnaId)).toEqual(["unlocked"]);
+    expect(r).toHaveLength(1);
+    expect(r[0]!.crossLanguageMatch).toBe(true);
+  });
+
+  it("treats omitted detectedLanguage as cross-language (relaxed floor)", async () => {
+    vi.mocked(vectorSearchQna).mockResolvedValue([
+      mkHit({ qnaId: "fr-no-detect", score: 0.7, language: "fr" }),
+    ]);
+    const r = await retrieveQnaMatches({ tenantId: "t", query: "x" });
+    expect(r).toHaveLength(1);
+    expect(r[0]!.crossLanguageMatch).toBe(true);
+  });
+
+  it("a high-scoring cross-language match (>= 0.85) is NOT flagged crossLanguageMatch", async () => {
+    // Some semantic equivalences score very high cross-language.
+    // Don't penalize them with the cross-language flag — the operator
+    // only needs the indicator when the score is below the same-language
+    // safety floor.
+    vi.mocked(vectorSearchQna).mockResolvedValue([
+      mkHit({ qnaId: "high-cross", score: 0.91, language: "fr" }),
+    ]);
+    const r = await retrieveQnaMatches({
+      tenantId: "t",
+      query: "x",
+      detectedLanguage: "ar",
+    });
+    expect(r).toHaveLength(1);
+    expect(r[0]!.crossLanguageMatch).toBe(false);
   });
 });
 
-describe("retrieveQnaMatches — empty / edge inputs", () => {
+describe("retrieveQnaMatches — language-lock filter (independent)", () => {
+  it("drops locked Q&A across languages regardless of score", async () => {
+    // Even at 0.99 cosine, a locked French Q&A doesn't match an Arabic
+    // query. The lock is a hard filter, not threshold-relaxable.
+    vi.mocked(vectorSearchQna).mockResolvedValue([
+      mkHit({ qnaId: "fr-locked", score: 0.99, language: "fr", languageLock: true }),
+      mkHit({ qnaId: "fr-unlocked", score: 0.7, language: "fr", languageLock: false }),
+    ]);
+    const r = await retrieveQnaMatches({
+      tenantId: "t",
+      query: "x",
+      detectedLanguage: "ar",
+    });
+    expect(r.map((m) => m.qnaId)).toEqual(["fr-unlocked"]);
+    expect(r[0]!.crossLanguageMatch).toBe(true);
+  });
+
+  it("keeps locked Q&A when detected language matches the locked language", async () => {
+    vi.mocked(vectorSearchQna).mockResolvedValue([
+      mkHit({ qnaId: "fr-locked", score: 0.92, language: "fr", languageLock: true }),
+    ]);
+    const r = await retrieveQnaMatches({
+      tenantId: "t",
+      query: "x",
+      detectedLanguage: "fr",
+    });
+    expect(r).toHaveLength(1);
+    expect(r[0]!.crossLanguageMatch).toBe(false);
+  });
+});
+
+describe("retrieveQnaMatches — threshold overrides", () => {
+  it("threshold overrides only the same-language floor", async () => {
+    vi.mocked(vectorSearchQna).mockResolvedValue([
+      mkHit({ qnaId: "edge", score: 0.7, language: "fr" }),
+    ]);
+    // detectedLanguage matches the Q&A's → same-language path → uses
+    // the override, not the default 0.85.
+    const r = await retrieveQnaMatches({
+      tenantId: "t",
+      query: "x",
+      detectedLanguage: "fr",
+      threshold: 0.65,
+    });
+    expect(r).toHaveLength(1);
+    expect(r[0]!.crossLanguageMatch).toBe(false); // still same-language path
+  });
+
+  it("crossLanguageThreshold overrides only the cross-language floor", async () => {
+    vi.mocked(vectorSearchQna).mockResolvedValue([
+      mkHit({ qnaId: "below-0.65", score: 0.55, language: "fr" }),
+    ]);
+    const r = await retrieveQnaMatches({
+      tenantId: "t",
+      query: "x",
+      detectedLanguage: "ar",
+      crossLanguageThreshold: 0.5,
+    });
+    expect(r).toHaveLength(1);
+    expect(r[0]!.crossLanguageMatch).toBe(true);
+  });
+});
+
+describe("retrieveQnaMatches — edge cases", () => {
   it("returns [] for empty query without hitting the DB", async () => {
     const r = await retrieveQnaMatches({ tenantId: "t", query: "  " });
     expect(r).toEqual([]);

@@ -407,9 +407,19 @@ function CitationDetailHeader({ citation }: { citation: Citation }) {
     }
     case "qna":
       return (
-        <div className="text-caption uppercase tracking-wide text-[var(--success)]">
-          Q&amp;A · {citation.question.slice(0, 60)}
-          {citation.question.length > 60 ? "…" : ""}
+        <div className="space-y-1">
+          <div className="text-caption uppercase tracking-wide text-[var(--success)]">
+            Q&amp;A · {citation.question.slice(0, 60)}
+            {citation.question.length > 60 ? "…" : ""}
+          </div>
+          {citation.crossLanguageMatch ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-full border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 py-0.5 text-caption text-[var(--warning)]"
+              title="This match fired below the same-language safety threshold (0.85). The Q&A and the customer's question are in different languages — review for false positives."
+            >
+              cross-language match
+            </span>
+          ) : null}
         </div>
       );
     case "operational_fact":
