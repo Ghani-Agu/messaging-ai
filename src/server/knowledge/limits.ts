@@ -33,3 +33,29 @@ export const RETRIEVAL_DEFAULT_TOP_K = 8;
 export const RETRIEVAL_CANDIDATE_POOL = 50; // top-N from each modality before fusion
 export const RRF_K = 60; // standard Reciprocal Rank Fusion constant
 export const HNSW_EF_SEARCH = 100; // SET LOCAL hnsw.ef_search before each vector query
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 8 — typed knowledge limits
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Per-tenant soft caps for typed-knowledge tables. Same pattern as
+// MAX_CHUNKS_PER_TENANT — surfaced in the dashboard as a warning banner,
+// never a hard block.
+export const MAX_ITEMS_PER_TENANT = 5_000;
+export const MAX_QNA_PER_TENANT = 1_000;
+
+// Document freshness signal. A KnowledgeSource is rendered with a "stale"
+// badge when max(lastIngestedAt, lastVerifiedAt) is older than this many
+// days. Per Gate 1 F: 45 days for documents (down from the original 90
+// — distributors update catalogs frequently). Items have no time-based
+// staleness; verification is purely operator-driven.
+export const DOCUMENT_STALE_AFTER_DAYS = 45;
+
+// Q&A authoritative-match threshold. Cosine-similarity floor on the
+// question embedding. Matches above this floor are injected into Block C
+// as "AUTHORITATIVE ANSWER" and the brain reuses the answer near-verbatim
+// (only language-register-adapting). Below the floor, the question falls
+// through to normal hybrid retrieval. Per Gate 1 K3: 0.85 (override of the
+// originally proposed 0.82 — tighter for safety). No auto-skip yet; brain
+// still composes the reply. Wired into the retriever in P8e.
+export const QNA_MATCH_THRESHOLD = 0.85;

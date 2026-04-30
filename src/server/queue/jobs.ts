@@ -53,3 +53,41 @@ export async function enqueueEmbedBatches(args: {
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 8b stubs — typed-knowledge embeddings.
+//
+// P8c lands the actual embed worker discriminator
+// ({ kind: "chunk" | "item" | "qna" }) and routes through it; for P8b these
+// helpers are no-ops so item/qna create paths can call them without
+// further changes when the worker arrives. Items + Q&A created in P8b
+// stay `embedding IS NULL` and don't surface in semantic search yet —
+// list/edit/delete still works.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function enqueueEmbedItem(args: {
+  itemId: string;
+  tenantId: string;
+}): Promise<void> {
+  // No-op until P8c. Argument retained so the call site is final.
+  void args;
+  return;
+}
+
+export async function enqueueEmbedQna(args: {
+  qnaId: string;
+  tenantId: string;
+}): Promise<void> {
+  // No-op until P8c.
+  void args;
+  return;
+}
+
+export async function enqueueEmbedKnowledgeGap(args: {
+  gapId: string;
+  tenantId: string;
+}): Promise<void> {
+  // No-op until P8g (gap clustering).
+  void args;
+  return;
+}
