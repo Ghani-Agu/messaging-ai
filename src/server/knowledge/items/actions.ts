@@ -15,6 +15,8 @@ import {
   type KnowledgeItemInput,
 } from "@/server/db/items";
 import type { KnowledgeItem } from "@prisma/client";
+import { getClaudeClient, type StructuredItemDraft } from "@/server/ai/claude-client";
+import { importCsvForItems, type CsvImportResult } from "@/lib/csv-import";
 
 /**
  * Server Actions for the Products / Items admin surface (Phase 8c).
@@ -105,4 +107,78 @@ export async function markAllItemsVerifiedAction(
 ): Promise<{ count: number }> {
   const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
   return markAllItemsVerifiedForTenant({ tenantId: ctx.tenant.id });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 8c — smart import + CSV
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Smart import — operator pastes free-text catalog data, Claude
+ * structures it, operator reviews + approves. P8c-4 ships against the
+ * StubClaudeClient (rotating-wrong-field stub per Gate-1 K4); when the
+ * real Claude wrapper lands the call site doesn't change.
+ *
+ * AGENT-floor (this is a write-shaped read — the operator's about to
+ * commit drafts).
+ */
+export async function smartImportItemsAction(
+  slug: string,
+  input: { text: string },
+): Promise<{ items: StructuredItemDraft[]; notes?: string }> {
+  await requireTenantContext(slug, { minRole: "AGENT" });
+  if (!input.text || !input.text.trim()) {
+    throw new Error("Paste some catalog text first");
+  }
+  const client = getClaudeClient();
+  if (!client.structureItemsFromText) {
+    throw new Error("Smart import not available with this Claude client");
+  }
+  const r = await client.structureItemsFromText({ text: input.text });
+  return { items: r.toolArgs.items, notes: r.toolArgs.notes };
+}
+
+/**
+ * CSV preview — pure parse-and-validate. Does NOT write to the DB. The
+ * operator commits via `commitImportedItemsAction` after reviewing the
+ * preview UI.
+ */
+export async function previewCsvImportAction(
+  slug: string,
+  input: { csv: string },
+): Promise<CsvImportResult> {
+  await requireTenantContext(slug, { minRole: "AGENT" });
+  return importCsvForItems(input.csv ?? "");
+}
+
+/**
+ * Commit a batch of operator-approved item drafts. Each draft is
+ * re-parsed through knowledgeItemInputSchema at the trust boundary.
+ * Per-row failures are collected and reported back; we don't transactional-
+ * fail the whole batch on one bad row (the operator sees which rows landed).
+ */
+export async function commitImportedItemsAction(
+  slug: string,
+  input: { items: unknown[] },
+): Promise<{
+  created: { id: string; row: number }[];
+  failed: { row: number; error: string }[];
+}> {
+  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const created: { id: string; row: number }[] = [];
+  const failed: { row: number; error: string }[] = [];
+  for (let i = 0; i < (input.items ?? []).length; i++) {
+    const raw = input.items[i];
+    try {
+      const parsed: KnowledgeItemInput = knowledgeItemInputSchema.parse(raw);
+      const r = await createItem({ tenantId: ctx.tenant.id, input: parsed });
+      created.push({ id: r.id, row: i + 1 });
+    } catch (err) {
+      failed.push({
+        row: i + 1,
+        error: err instanceof Error ? err.message : "unknown error",
+      });
+    }
+  }
+  return { created, failed };
 }

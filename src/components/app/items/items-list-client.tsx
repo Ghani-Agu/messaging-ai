@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   AlertTriangle,
   Check,
@@ -13,6 +14,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -222,6 +224,13 @@ export function ItemsListClient({
           <StatusPill status={status} />
           {canEdit ? (
             <>
+              <Link
+                href={`/${tenantSlug}/knowledge/items/import`}
+                className="inline-flex h-8 items-center gap-2 rounded-md border border-[var(--border-default)] bg-[var(--bg-surface-elevated)] px-3 text-body-sm font-medium text-[var(--text-primary)] transition-colors duration-150 ease-out hover:bg-[var(--bg-surface-overlay)] hover:border-[var(--border-strong)]"
+              >
+                <Upload className="size-3.5" />
+                Import
+              </Link>
               <Button
                 type="button"
                 variant="secondary"

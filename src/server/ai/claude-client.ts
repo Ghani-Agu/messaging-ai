@@ -95,6 +95,79 @@ export const SEND_REPLY_TOOL = {
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// structure_items tool — Phase 8c smart-import contract
+//
+// "Smart import" = operator pastes free-text catalog data, Claude
+// structures it into KnowledgeItemInput-shaped rows, operator reviews +
+// approves. The tool returns an array of partially-structured items;
+// the Server Action layer maps to KnowledgeItemInput, the operator
+// fills in any missing/wrong fields in the preview UI, then the
+// commit action calls createItem one by one.
+//
+// Schema is intentionally LOOSE on the server side — Claude may guess
+// some fields wrong (especially currency / availability), and we want
+// the operator-correction UI to fire rather than rejecting the whole
+// batch on a bad guess.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type StructuredItemDraft = {
+  name: string;
+  category?: string;
+  brand?: string;
+  sku?: string;
+  currency?: string;
+  /** Decimal price string from the source — converted to cents post-review. */
+  price?: string;
+  availability?: "IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK" | "UNKNOWN";
+  description?: string;
+  /** Free-form spec key/value pairs Claude pulled out of the source. */
+  specs?: Record<string, string>;
+};
+
+export type StructureItemsToolArgs = {
+  items: StructuredItemDraft[];
+  /** Diagnostic notes Claude returns about ambiguous fields, etc. */
+  notes?: string;
+};
+
+export const SEND_STRUCTURED_ITEMS_TOOL = {
+  name: "structure_items",
+  description:
+    "Convert free-text catalog data into structured items the operator can review and approve. Make a best-effort guess on each field; missing or unclear fields can be left undefined — the operator will fill them in.",
+  input_schema: {
+    type: "object",
+    required: ["items"],
+    properties: {
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["name"],
+          properties: {
+            name: { type: "string" },
+            category: { type: "string" },
+            brand: { type: "string" },
+            sku: { type: "string" },
+            currency: { type: "string" },
+            price: { type: "string" },
+            availability: {
+              type: "string",
+              enum: ["IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK", "UNKNOWN"],
+            },
+            description: { type: "string" },
+            specs: {
+              type: "object",
+              additionalProperties: { type: "string" },
+            },
+          },
+        },
+      },
+      notes: { type: "string" },
+    },
+  },
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Client interface
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -125,6 +198,19 @@ export type StreamEvent =
   | { type: "delta"; text: string }
   | { type: "done"; result: SendReplyResult };
 
+export type StructureItemsArgs = {
+  /** Operator-pasted free-text catalog data. May be messy. */
+  text: string;
+  /** Hard cap on items to return. Default 20 — keeps the preview UI bounded. */
+  maxItems?: number;
+};
+
+export type StructureItemsResult = {
+  toolArgs: StructureItemsToolArgs;
+  modelId: string;
+  usage: { inputTokens: number; outputTokens: number } | null;
+};
+
 export interface ClaudeClient {
   sendReply(args: SendReplyArgs): Promise<SendReplyResult>;
   /**
@@ -133,6 +219,13 @@ export interface ClaudeClient {
    * interface so the boundary is stable.
    */
   streamReply?(args: SendReplyArgs): AsyncIterable<StreamEvent>;
+  /**
+   * Phase 8c smart-import. Returns structured item drafts for the
+   * operator-review/edit/approve flow. The stub returns slightly-imperfect
+   * results (one rotating-wrong field per call) so the correction UI gets
+   * exercised broadly (Gate-1 K4).
+   */
+  structureItemsFromText?(args: StructureItemsArgs): Promise<StructureItemsResult>;
 }
 
 export class NotImplementedError extends Error {
@@ -228,6 +321,114 @@ export class StubClaudeClient implements ClaudeClient {
       usage: null,
     };
   }
+
+  // Phase 8c smart-import stub. Returns 3 deterministic items pattern-
+  // matched against the input text, with one rotating-wrong field per
+  // call so the operator-correction UI is exercised broadly (Gate-1 K4).
+  // The rotation cursor is a module-scoped counter (state lives on the
+  // class instance for testability — __resetClaudeClientForTests resets
+  // both the cached client and the rotation cursor).
+  private rotationCursor = 0;
+
+  async structureItemsFromText(args: StructureItemsArgs): Promise<StructureItemsResult> {
+    const drafts = stubStructureItems(args.text, this.rotationCursor);
+    this.rotationCursor = (this.rotationCursor + 1) % WRONG_FIELD_ROTATION.length;
+    return {
+      toolArgs: { items: drafts, notes: "stub: pattern-matched against keywords" },
+      modelId: "stub",
+      usage: null,
+    };
+  }
+}
+
+// Rotation list: each call returns drafts with this field deliberately
+// missing/wrong. Operators editing the preview thus exercise every
+// correction path over a session.
+const WRONG_FIELD_ROTATION = [
+  "currency", // missing currency on a priced item
+  "availability", // wrong availability (IN_STOCK when description says "out")
+  "price", // missing price
+  "brand", // missing brand
+  "sku", // missing sku
+] as const;
+
+function stubStructureItems(
+  text: string,
+  cursor: number,
+): StructuredItemDraft[] {
+  const wrongField = WRONG_FIELD_ROTATION[cursor % WRONG_FIELD_ROTATION.length]!;
+  // Pattern-match a couple of common keywords so the preview shows
+  // plausible items the operator can recognize. Default = 3 generic items.
+  const lower = text.toLowerCase();
+  const drafts: StructuredItemDraft[] = [];
+
+  if (/macbook|laptop/.test(lower)) {
+    drafts.push({
+      name: "Macbook Pro M3",
+      category: "laptops",
+      brand: "Apple",
+      sku: "MBP-M3-14",
+      currency: "USD",
+      price: "2200.00",
+      availability: "IN_STOCK",
+      description: "14-inch laptop with M3 chip.",
+      specs: { ram: "16GB", storage: "512GB" },
+    });
+  }
+  if (/iphone|phone/.test(lower)) {
+    drafts.push({
+      name: "iPhone 15",
+      category: "phones",
+      brand: "Apple",
+      sku: "IP-15-128",
+      currency: "USD",
+      price: "799.00",
+      availability: "IN_STOCK",
+      description: "128GB smartphone.",
+      specs: { color: "black" },
+    });
+  }
+  if (/router|network/.test(lower)) {
+    drafts.push({
+      name: "Asus Router AC2900",
+      category: "networking",
+      brand: "Asus",
+      sku: "ASUS-RT-AC2900",
+      currency: "USD",
+      price: "180.00",
+      availability: "LOW_STOCK",
+      description: "Dual-band wireless router.",
+    });
+  }
+
+  // Fallback: 3 generic items so the preview UI always has something.
+  while (drafts.length < 3) {
+    const i = drafts.length + 1;
+    drafts.push({
+      name: `Sample Product ${i}`,
+      category: "uncategorized",
+      brand: "Generic",
+      sku: `SAMPLE-${i}`,
+      currency: "USD",
+      price: `${(i * 100).toFixed(2)}`,
+      availability: "UNKNOWN",
+      description: `Sample item ${i} for smart-import preview.`,
+    });
+  }
+
+  // Apply the rotating wrong-field — strip the chosen field on the FIRST
+  // draft so the operator's edit path fires. (Other drafts unaffected so
+  // a multi-item preview shows mixed accuracy.)
+  if (drafts.length > 0) {
+    const first = { ...drafts[0]! };
+    if (wrongField === "availability") {
+      first.availability = "IN_STOCK"; // potentially wrong vs description
+    } else {
+      delete (first as Record<string, unknown>)[wrongField];
+    }
+    drafts[0] = first;
+  }
+  return drafts;
 }
 
 // Per-language canned strings. Intentionally short and on-script so the
