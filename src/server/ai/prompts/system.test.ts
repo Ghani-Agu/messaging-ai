@@ -93,6 +93,77 @@ describe("buildBlockA / buildBlockB / buildBlockC", () => {
     expect(b.text).not.toContain("FEW-SHOT EXAMPLES");
   });
 
+  it("buildBlockB renders tier-1 operational facts when supplied (Phase 8b)", () => {
+    const voice = defaultVoiceProfile();
+    const b = buildBlockB({
+      tenantName: "Acme Co.",
+      voice,
+      operationalFactsTier1: {
+        displayName: "Acme Distribution",
+        primaryLanguage: "ar",
+        primaryContact: {
+          name: "Ops Desk",
+          email: "ops@acme.test",
+          phone: "+213 555 12 34 56",
+        },
+        languagesServed: ["fr", "ar", "darija"],
+      },
+    });
+    // displayName takes precedence over tenantName.
+    expect(b.text).toContain("Business name: Acme Distribution");
+    // Operator-set primary language appears (differs from voice default "fr").
+    expect(b.text).toContain("Primary language (operator-set): ar");
+    expect(b.text).toContain("Languages served: fr, ar, darija");
+    expect(b.text).toContain(
+      "Primary contact (for human handoff): Ops Desk · ops@acme.test · +213 555 12 34 56",
+    );
+  });
+
+  it("buildBlockB falls back to tenantName when displayName is missing", () => {
+    const voice = defaultVoiceProfile();
+    const b = buildBlockB({
+      tenantName: "Acme Co.",
+      voice,
+      operationalFactsTier1: { primaryLanguage: "fr" },
+    });
+    expect(b.text).toContain("Business name: Acme Co.");
+  });
+
+  it("buildBlockB skips primary-language line when it matches voice.defaultLanguage", () => {
+    const voice = defaultVoiceProfile(); // defaultLanguage = "fr"
+    const b = buildBlockB({
+      tenantName: "Acme",
+      voice,
+      operationalFactsTier1: { primaryLanguage: "fr" },
+    });
+    expect(b.text).toContain("Default language: fr");
+    expect(b.text).not.toContain("Primary language (operator-set)");
+  });
+
+  it("buildBlockB renders only contact bits that are present", () => {
+    const voice = defaultVoiceProfile();
+    const b = buildBlockB({
+      tenantName: "Acme",
+      voice,
+      operationalFactsTier1: {
+        primaryContact: { email: "only-email@acme.test" },
+      },
+    });
+    expect(b.text).toContain("Primary contact (for human handoff): only-email@acme.test");
+    // No stray separators when name / phone are absent.
+    expect(b.text).not.toContain("· · ");
+  });
+
+  it("buildBlockB omits the primary-contact line entirely when contact is empty", () => {
+    const voice = defaultVoiceProfile();
+    const b = buildBlockB({
+      tenantName: "Acme",
+      voice,
+      operationalFactsTier1: { primaryContact: {} },
+    });
+    expect(b.text).not.toContain("Primary contact");
+  });
+
   it("buildBlockC renders citations + history + new message", () => {
     const c = buildBlockC({
       citations: [

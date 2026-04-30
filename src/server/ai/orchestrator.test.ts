@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as OperationalFactsModule from "../db/operational-facts";
 
-// Prisma + retriever are mocked so this test never hits the live DB or
-// embedding API. We're testing the orchestrator's wiring, not its deps.
+// Prisma + retriever + operational-facts are mocked so this test never
+// hits the live DB or embedding API. We're testing the orchestrator's
+// wiring, not its deps.
 vi.mock("../db/client", () => ({
   prisma: {
     tenant: {
@@ -14,8 +16,21 @@ vi.mock("../knowledge/retriever", () => ({
   retrieve: vi.fn(),
 }));
 
+vi.mock("../db/operational-facts", async () => {
+  const actual = await vi.importActual<typeof OperationalFactsModule>(
+    "../db/operational-facts",
+  );
+  return {
+    // Re-export pickTier1 / parseOperationalFactsData / TIER1_KEYS as-is
+    // so the orchestrator's pickTier1 call works against real logic.
+    ...actual,
+    getOperationalFacts: vi.fn(),
+  };
+});
+
 import { prisma } from "../db/client";
 import { retrieve } from "../knowledge/retriever";
+import { getOperationalFacts } from "../db/operational-facts";
 import { runBrain } from "./orchestrator";
 import {
   __resetClaudeClientForTests,
@@ -57,6 +72,9 @@ beforeEach(() => {
   __resetClaudeClientForTests();
   vi.mocked(prisma.tenant.findUnique).mockResolvedValue(mockedTenant as never);
   vi.mocked(retrieve).mockResolvedValue([sampleChunk(0), sampleChunk(1), sampleChunk(2)]);
+  // Default: no operational facts (pre-Phase-8 tenant). Specific tests
+  // override per-call to inject tier-1 / tier-2 envelopes.
+  vi.mocked(getOperationalFacts).mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -180,5 +198,108 @@ describe("runBrain — guardrails", () => {
   it("uses the StubClaudeClient by default", () => {
     // Sanity: factory wires the stub.
     expect(new StubClaudeClient()).toBeDefined();
+  });
+});
+
+describe("runBrain — Phase 8b operational facts (tier-1 in Block B)", () => {
+  // Capture the system blocks the stub sees so we can inspect what flowed
+  // through buildBlockB. The stub doesn't itself surface them in
+  // BrainResult, so we spy on the client for these tests.
+  it("loads operational facts and calls getOperationalFacts with tenantId", async () => {
+    vi.mocked(getOperationalFacts).mockResolvedValueOnce({
+      displayName: "WBP Distribution",
+      primaryLanguage: "fr",
+    });
+    await runBrain({ tenantId: "tenant-1", message: "hello" });
+    expect(vi.mocked(getOperationalFacts)).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("renders tier-1 facts (displayName + languagesServed) into Block B and omits tier-2", async () => {
+    // Spy on StubClaudeClient.sendReply to capture the system blocks the
+    // brain assembled. Use module mocking against this single test.
+    const { __resetClaudeClientForTests, getClaudeClient } = await import(
+      "./claude-client"
+    );
+    __resetClaudeClientForTests();
+    const client = getClaudeClient();
+    const sendSpy = vi.spyOn(client, "sendReply");
+
+    // mockedTenant.voiceProfile.defaultLanguage is "fr" — pick a different
+    // primaryLanguage here so the operator-set line actually renders
+    // (when they match, buildBlockB suppresses the duplicate, asserted in
+    // a separate test below).
+    vi.mocked(getOperationalFacts).mockResolvedValueOnce({
+      // tier-1
+      displayName: "WBP Distribution",
+      primaryLanguage: "ar",
+      languagesServed: ["fr", "ar", "en"],
+      primaryContact: { email: "ops@wbp.test", name: "Ops Desk" },
+      // tier-2 — must NOT appear in Block B
+      hours: { tz: "Africa/Algiers", weekly: [] },
+      currency: "DZD",
+      locations: [{ label: "HQ", address: "Algiers" }],
+      serviceArea: "Algeria",
+    });
+
+    await runBrain({ tenantId: "tenant-1", message: "hello" });
+
+    expect(sendSpy).toHaveBeenCalledOnce();
+    const callArgs = sendSpy.mock.calls[0]![0]!;
+    const blockBText = callArgs.system[1]!.text;
+
+    // Tier-1 surfaces:
+    expect(blockBText).toContain("Business name: WBP Distribution");
+    expect(blockBText).toContain("Primary language (operator-set): ar");
+    expect(blockBText).toContain("Languages served: fr, ar, en");
+    expect(blockBText).toContain("Primary contact (for human handoff)");
+    expect(blockBText).toContain("ops@wbp.test");
+
+    // Tier-2 does NOT leak into Block B:
+    expect(blockBText).not.toContain("Africa/Algiers");
+    expect(blockBText).not.toContain("DZD");
+    expect(blockBText).not.toContain("Algiers");
+    expect(blockBText).not.toContain("Service area");
+    // P8b: tier-2 retrieval not yet wired; assert it's NOT in Block C either
+    // (it lives only in the OperationalFacts row until the retrieval pass
+    // lands).
+    expect(callArgs.userMessage).not.toContain("DZD");
+  });
+
+  it("falls back to tenant.name when displayName is unset", async () => {
+    const { __resetClaudeClientForTests, getClaudeClient } = await import(
+      "./claude-client"
+    );
+    __resetClaudeClientForTests();
+    const client = getClaudeClient();
+    const sendSpy = vi.spyOn(client, "sendReply");
+
+    // No facts at all (default mock returns {}). Block B should still
+    // render with "Business name: Acme Co." from the tenant row.
+    await runBrain({ tenantId: "tenant-1", message: "hello" });
+    const blockBText = sendSpy.mock.calls[0]![0]!.system[1]!.text;
+    expect(blockBText).toContain("Business name: Acme Co.");
+    // No primary-language line when facts are empty.
+    expect(blockBText).not.toContain("Primary language (operator-set)");
+  });
+
+  it("does not surface a primary-language line when it equals the voice profile default", async () => {
+    const { __resetClaudeClientForTests, getClaudeClient } = await import(
+      "./claude-client"
+    );
+    __resetClaudeClientForTests();
+    const client = getClaudeClient();
+    const sendSpy = vi.spyOn(client, "sendReply");
+
+    // mockedTenant's voiceProfile.defaultLanguage is "fr". When facts'
+    // primaryLanguage is also "fr", we don't add a duplicate line.
+    vi.mocked(getOperationalFacts).mockResolvedValueOnce({
+      primaryLanguage: "fr",
+    });
+    await runBrain({ tenantId: "tenant-1", message: "hello" });
+    const blockBText = sendSpy.mock.calls[0]![0]!.system[1]!.text;
+    expect(blockBText).toContain("Default language: fr");
+    expect(blockBText).not.toContain("Primary language (operator-set)");
   });
 });

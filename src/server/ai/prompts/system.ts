@@ -1,6 +1,7 @@
 import "server-only";
 import type { VoiceProfile } from "@/lib/validators";
 import type { RetrievedChunk } from "@/server/knowledge/retriever";
+import type { OperationalFactsTier1 } from "@/server/db/operational-facts";
 
 /**
  * AI brain prompt builders. The system prompt is assembled as a multi-block
@@ -67,21 +68,60 @@ export function buildBlockA(): SystemBlock {
 }
 
 /**
- * Block B — per-tenant identity + voice profile + few-shot examples.
- * Identical across every conversation a given tenant has, so it stays
- * cache-friendly. Few-shot examples are the highest-leverage knob for
- * "doesn't sound like AI" — see MASTER_PLAN §8.
+ * Block B — per-tenant identity + voice profile + tier-1 operational facts +
+ * few-shot examples. Identical across every conversation a given tenant has,
+ * so it stays cache-friendly. Tier-2 facts (full hours, full location list,
+ * exceptions) live in Block C via retrieval, not here — the tier split per
+ * Gate-1 K5 keeps Block B's token weight bounded.
+ *
+ * Few-shot examples are the highest-leverage knob for "doesn't sound like
+ * AI" — see MASTER_PLAN §8.
  */
 export function buildBlockB(args: {
   tenantName: string;
   voice: VoiceProfile;
+  /** Optional tier-1 operational facts (Phase 8b). Omit for tenants who haven't filled in Business Info. */
+  operationalFactsTier1?: OperationalFactsTier1;
 }): SystemBlock {
-  const { tenantName, voice } = args;
+  const { tenantName, voice, operationalFactsTier1: facts } = args;
+
+  // Display name precedence: tenant-set displayName from operational facts,
+  // else the tenant.name from the row. Doesn't change the underlying
+  // tenantName stored in DB — purely how the brand is referred to.
+  const businessName = facts?.displayName?.trim() || tenantName;
+
   const lines: string[] = [
     "TENANT",
-    `- Business name: ${tenantName}`,
+    `- Business name: ${businessName}`,
     `- Default language: ${voice.defaultLanguage}`,
     `- Fallback language: ${voice.fallbackLanguage}`,
+  ];
+
+  if (facts) {
+    if (facts.primaryLanguage && facts.primaryLanguage !== voice.defaultLanguage) {
+      // Operator can pin a primary language distinct from the voice
+      // profile's default. When they conflict, primaryLanguage wins (it's
+      // the human's explicit "this is what we mainly serve in").
+      lines.push(`- Primary language (operator-set): ${facts.primaryLanguage}`);
+    }
+    if (facts.languagesServed && facts.languagesServed.length > 0) {
+      lines.push(`- Languages served: ${facts.languagesServed.join(", ")}`);
+    }
+    if (facts.primaryContact) {
+      const c = facts.primaryContact;
+      const contactBits: string[] = [];
+      if (c.name) contactBits.push(c.name);
+      if (c.email) contactBits.push(c.email);
+      if (c.phone) contactBits.push(c.phone);
+      if (contactBits.length > 0) {
+        // Surfaced for human-handoff replies — when the brain decides to
+        // refer the customer to a person, this is the contact to mention.
+        lines.push(`- Primary contact (for human handoff): ${contactBits.join(" · ")}`);
+      }
+    }
+  }
+
+  lines.push(
     "",
     "BRAND VOICE",
     `- Tone: ${voice.tone}`,
@@ -93,7 +133,8 @@ export function buildBlockB(args: {
       ? `- Avoid:\n${voice.avoid.map((p) => `    • ${p}`).join("\n")}`
       : "- Avoid: (no explicit constraints)",
     `- Emoji policy: ${voice.emojiPolicy}`,
-  ];
+  );
+
   if (voice.fewShot.length > 0) {
     lines.push(
       "",
@@ -175,12 +216,21 @@ export function buildBlockC(args: {
 export function buildPrompt(args: {
   tenantName: string;
   voice: VoiceProfile;
+  /** Tier-1 operational facts (Phase 8b). Optional — pre-Phase-8 tenants pass undefined. */
+  operationalFactsTier1?: OperationalFactsTier1;
   citations: CitationView[];
   history: HistoryTurn[];
   message: string;
 }): { system: SystemBlock[]; userMessage: string } {
   return {
-    system: [buildBlockA(), buildBlockB({ tenantName: args.tenantName, voice: args.voice })],
+    system: [
+      buildBlockA(),
+      buildBlockB({
+        tenantName: args.tenantName,
+        voice: args.voice,
+        operationalFactsTier1: args.operationalFactsTier1,
+      }),
+    ],
     userMessage: buildBlockC({
       citations: args.citations,
       history: args.history,

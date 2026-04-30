@@ -3,6 +3,10 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db/client";
 import { getVoiceProfile } from "@/lib/validators";
 import { retrieve, type RetrievedChunk } from "@/server/knowledge/retriever";
+import {
+  getOperationalFacts,
+  pickTier1,
+} from "@/server/db/operational-facts";
 import { buildPrompt, type CitationView, type HistoryTurn } from "./prompts/system";
 import {
   computeConfidence,
@@ -37,9 +41,14 @@ import {
  * always exists; a future `runBrainStream` will join it.
  */
 
-// Performance budgets (Phase-4 Gate-1 §6).
+// Performance budgets (Phase-4 Gate-1 §6, bumped in Phase-8b Gate-1).
 const MAX_REPLY_TOKENS = 600;
-const MAX_INPUT_TOKEN_HEADROOM = 6000;
+// Bumped 6000 → 8000 in Phase 8b: tier-1 operational facts in Block B and
+// (later) structured Items + Q&A in Block C add headroom pressure that the
+// original Phase-4 budget didn't anticipate. Per-section caps at the
+// builder layer keep the overall envelope under control; this guard
+// remains the last-line failsafe before an API call.
+const MAX_INPUT_TOKEN_HEADROOM = 8000;
 const TOP_K_DEFAULT = 8;
 const HISTORY_TURNS_DEFAULT = 8;
 
@@ -107,12 +116,22 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
   const topK = input.topK ?? TOP_K_DEFAULT;
   const history = (input.history ?? []).slice(-HISTORY_TURNS_DEFAULT);
 
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: { name: true, settings: true },
-  });
+  // Load tenant + facts in parallel — both are independent reads against
+  // tenantId. The retriever fires once we know the query (still in-band
+  // here so a missing tenant short-circuits before we burn embedding cost).
+  const [tenant, factsData] = await Promise.all([
+    prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true, settings: true },
+    }),
+    getOperationalFacts({ tenantId }),
+  ]);
   if (!tenant) throw new Error(`tenant not found: ${tenantId}`);
   const voice = getVoiceProfile(tenant.settings as Prisma.JsonValue);
+  // Tier-1 only — tier-2 (hours/locations/exceptions) flows into Block C
+  // via retrieval when that pass lands; for P8b it's editable but invisible
+  // to the brain, per Gate-1 K5.
+  const operationalFactsTier1 = pickTier1(factsData);
 
   const retrieved: RetrievedChunk[] = await retrieve({
     tenantId,
@@ -129,6 +148,7 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
   const { system, userMessage } = buildPrompt({
     tenantName: tenant.name,
     voice,
+    operationalFactsTier1,
     citations: citationViews,
     history,
     message,
