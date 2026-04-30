@@ -55,34 +55,54 @@ export async function enqueueEmbedBatches(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 8b stubs — typed-knowledge embeddings.
+// Phase 8c — typed-knowledge embeddings.
 //
-// P8c lands the actual embed worker discriminator
-// ({ kind: "chunk" | "item" | "qna" }) and routes through it; for P8b these
-// helpers are no-ops so item/qna create paths can call them without
-// further changes when the worker arrives. Items + Q&A created in P8b
-// stay `embedding IS NULL` and don't surface in semantic search yet —
-// list/edit/delete still works.
+// Separate job types per kind (rather than a single discriminated job)
+// because items / qna don't carry a sourceId and each has its own
+// attach-vector helper. Workers in src/server/queue/workers/embed.ts
+// dispatch via BullMQ's named-job routing.
+//
+// Same EMBED_BATCH_SIZE (32) as Phase-3 chunks — the embeddings provider's
+// per-call batch limit dominates; one tenant uploading 5,000 items at once
+// fans into 157 jobs that BullMQ schedules with the embed worker's
+// concurrency=4. A few minutes end-to-end on Voyage's free tier.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function enqueueEmbedItem(args: {
-  itemId: string;
+export async function enqueueEmbedItems(args: {
   tenantId: string;
+  itemIds: string[];
 }): Promise<void> {
-  // No-op until P8c. Argument retained so the call site is final.
-  void args;
-  return;
+  if (args.itemIds.length === 0) return;
+  for (let i = 0; i < args.itemIds.length; i += EMBED_BATCH_SIZE) {
+    const batch = args.itemIds.slice(i, i + EMBED_BATCH_SIZE);
+    await embedQueue.add(
+      "embed-items-batch",
+      { tenantId: args.tenantId, itemIds: batch },
+      DEFAULT_JOB_OPTIONS,
+    );
+  }
 }
 
 export async function enqueueEmbedQna(args: {
-  qnaId: string;
   tenantId: string;
+  qnaIds: string[];
 }): Promise<void> {
-  // No-op until P8c.
-  void args;
-  return;
+  if (args.qnaIds.length === 0) return;
+  for (let i = 0; i < args.qnaIds.length; i += EMBED_BATCH_SIZE) {
+    const batch = args.qnaIds.slice(i, i + EMBED_BATCH_SIZE);
+    await embedQueue.add(
+      "embed-qna-batch",
+      { tenantId: args.tenantId, qnaIds: batch },
+      DEFAULT_JOB_OPTIONS,
+    );
+  }
 }
 
+/**
+ * KnowledgeGap embedding (used by P8g clusterer). Stub kept here so the
+ * gap-record call site (caller of runBrain) doesn't need to change when
+ * the clusterer lands.
+ */
 export async function enqueueEmbedKnowledgeGap(args: {
   gapId: string;
   tenantId: string;

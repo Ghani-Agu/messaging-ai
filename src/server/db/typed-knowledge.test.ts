@@ -12,7 +12,19 @@ vi.mock("./client", () => ({
       findFirst: vi.fn(),
       updateMany: vi.fn(),
     },
+    $executeRaw: vi.fn(),
   },
+}));
+
+// Phase 8c: db/items + db/qna now import enqueueEmbedItems /
+// enqueueEmbedQna from queue/jobs. queue/jobs loads queue/queues which
+// instantiates Queue() at module-load and throws if REDIS_URL is unset
+// (which it isn't in test env). Mock the enqueue helpers to no-ops so the
+// import graph never reaches Redis.
+vi.mock("@/server/queue/jobs", () => ({
+  enqueueEmbedItems: vi.fn(async () => {}),
+  enqueueEmbedQna: vi.fn(async () => {}),
+  enqueueEmbedKnowledgeGap: vi.fn(async () => {}),
 }));
 
 import { Prisma } from "@prisma/client";

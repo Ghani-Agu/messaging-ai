@@ -1,5 +1,6 @@
 import "server-only";
 import type { SystemBlock } from "./prompts/system";
+import { detectLanguage } from "@/lib/language-detect";
 
 /**
  * The boundary between the orchestrator and "an actual Claude call". The
@@ -153,23 +154,12 @@ export class NotImplementedError extends Error {
 // human request / Darija both scripts) the orchestrator + UI care about.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ARABIZI_RE = /\b(?:wach|kayan|kifash|rana|3andkom|bezzaf|khouya|khdma|blasa)\b/i;
-const ARABIC_SCRIPT_RE = /[؀-ۿ]/;
-const FRENCH_RE = /\b(?:bonjour|merci|s'il vous plaît|quel|votre|vos|comment)\b/i;
 const REFUND_RE = /(rembours|refund|inacceptable|scandale|lawyer|legal action)/i;
 const HUMAN_RE = /\b(human|agent|manager|humain|conseiller|مدير|واحد بشري)\b/i;
 
-function detectLanguageStub(message: string): SupportedReplyLanguage {
-  if (ARABIZI_RE.test(message)) return "darija";
-  if (ARABIC_SCRIPT_RE.test(message)) {
-    // crude split: Darija uses dialect markers; otherwise call it MSA.
-    if (/(واش|كيفاش|راني|راح|بزاف)/.test(message)) return "darija";
-    return "ar";
-  }
-  if (FRENCH_RE.test(message)) return "fr";
-  return "en";
-}
-
+// Stub language detection now delegates to the shared detector in
+// src/lib/language-detect.ts so the orchestrator and the stub use the
+// same logic. The original regex set lived here in Phase 4.
 function extractCustomerMessage(userMessage: string): string {
   const marker = "NEW CUSTOMER MESSAGE\n";
   const idx = userMessage.indexOf(marker);
@@ -188,7 +178,7 @@ function countCitations(userMessage: string): number {
 export class StubClaudeClient implements ClaudeClient {
   async sendReply(args: SendReplyArgs): Promise<SendReplyResult> {
     const customerMessage = extractCustomerMessage(args.userMessage);
-    const language = detectLanguageStub(customerMessage);
+    const language = detectLanguage(customerMessage);
     const numCitations = countCitations(args.userMessage);
 
     let toolArgs: SendReplyToolArgs;

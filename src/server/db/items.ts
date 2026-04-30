@@ -6,6 +6,7 @@ import {
   type KnowledgeItem,
 } from "@prisma/client";
 import { prisma } from "./client";
+import { enqueueEmbedItems } from "@/server/queue/jobs";
 
 /**
  * KnowledgeItem (Phase 8b — Type 2: structured items).
@@ -104,7 +105,7 @@ export async function createItem(args: {
   input: KnowledgeItemInput;
 }): Promise<{ id: string }> {
   const data = knowledgeItemInputSchema.parse(args.input);
-  return prisma.knowledgeItem.create({
+  const created = await prisma.knowledgeItem.create({
     data: {
       tenantId: args.tenantId,
       name: data.name,
@@ -120,6 +121,11 @@ export async function createItem(args: {
     },
     select: { id: true },
   });
+  // Phase 8c: enqueue embedding so the new item shows up in semantic search.
+  // Single-item batches are fine; the embed worker batches consecutive jobs
+  // up to EMBED_BATCH_SIZE on the provider call internally.
+  await enqueueEmbedItems({ tenantId: args.tenantId, itemIds: [created.id] });
+  return created;
 }
 
 export async function updateItem(args: {
@@ -144,6 +150,17 @@ export async function updateItem(args: {
     },
   });
   if (result.count === 0) throw new Error("Item not found");
+  // Phase 8c: clear the existing embedding so the worker re-embeds with
+  // the updated text. Without this the embed worker's idempotency guard
+  // (`AND embedding IS NULL`) would short-circuit and the vector would
+  // stay stale.
+  await prisma.$executeRaw`
+    UPDATE "KnowledgeItem"
+       SET "embedding" = NULL
+     WHERE "id" = ${args.itemId}
+       AND "tenantId" = ${args.tenantId}
+  `;
+  await enqueueEmbedItems({ tenantId: args.tenantId, itemIds: [args.itemId] });
 }
 
 export async function deleteItem(args: {
@@ -278,6 +295,93 @@ export async function listUnembeddedItemIds(args: {
      ORDER BY "createdAt" ASC
   `;
   return rows.map((r) => r.id);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Retrieval (Phase 8c)
+//
+// Vector + lexical search on items, used by the orchestrator's parallel
+// retrieval step alongside chunks and qna. Same RRF fusion shape as chunk
+// retrieval lives in the retriever module; this file owns the SQL.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type RawItemHit = {
+  itemId: string;
+  name: string;
+  category: string | null;
+  brand: string | null;
+  sku: string | null;
+  currency: string | null;
+  priceCents: number | null;
+  availability: ItemAvailability;
+  description: string | null;
+  specs: Prisma.JsonValue;
+  score: number;
+};
+
+import { HNSW_EF_SEARCH } from "@/server/knowledge/limits";
+
+/**
+ * Cosine-similarity vector search on KnowledgeItem.embedding, scoped to
+ * one tenant. Same SET LOCAL hnsw.ef_search dance as chunk search.
+ */
+export async function vectorSearchItems(args: {
+  tenantId: string;
+  queryVector: number[];
+  limit: number;
+}): Promise<RawItemHit[]> {
+  const literal = "[" + args.queryVector.join(",") + "]";
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL hnsw.ef_search = ${HNSW_EF_SEARCH}`);
+    return tx.$queryRaw<RawItemHit[]>`
+      SELECT i."id"          AS "itemId",
+             i."name"        AS "name",
+             i."category"    AS "category",
+             i."brand"       AS "brand",
+             i."sku"         AS "sku",
+             i."currency"    AS "currency",
+             i."priceCents"  AS "priceCents",
+             i."availability" AS "availability",
+             i."description" AS "description",
+             i."specs"       AS "specs",
+             1 - (i."embedding" <=> ${literal}::vector) AS "score"
+        FROM "KnowledgeItem" i
+       WHERE i."tenantId" = ${args.tenantId}
+         AND i."embedding" IS NOT NULL
+       ORDER BY i."embedding" <=> ${literal}::vector ASC
+       LIMIT ${args.limit}
+    `;
+  });
+}
+
+/**
+ * Lexical (full-text) search on KnowledgeItem.searchVector — the GENERATED
+ * weighted tsvector across name (A) / brand+sku (B) / description (C).
+ * Same `'simple'` config as chunks for AR/FR/EN/Darija mixing.
+ */
+export async function lexicalSearchItems(args: {
+  tenantId: string;
+  query: string;
+  limit: number;
+}): Promise<RawItemHit[]> {
+  return prisma.$queryRaw<RawItemHit[]>`
+    SELECT i."id"          AS "itemId",
+           i."name"        AS "name",
+           i."category"    AS "category",
+           i."brand"       AS "brand",
+           i."sku"         AS "sku",
+           i."currency"    AS "currency",
+           i."priceCents"  AS "priceCents",
+           i."availability" AS "availability",
+           i."description" AS "description",
+           i."specs"       AS "specs",
+           ts_rank(i."searchVector", plainto_tsquery('simple', ${args.query})) AS "score"
+      FROM "KnowledgeItem" i
+     WHERE i."tenantId" = ${args.tenantId}
+       AND i."searchVector" @@ plainto_tsquery('simple', ${args.query})
+     ORDER BY "score" DESC
+     LIMIT ${args.limit}
+  `;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

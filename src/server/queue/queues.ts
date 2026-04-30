@@ -40,12 +40,27 @@ export type EmbedBatchJobData = {
   tenantId: string;
   chunkIds: string[];
 };
+// Phase 8c — typed-knowledge embedding. Separate job names per kind
+// (rather than a single discriminated job) because items / qna don't carry
+// a sourceId and each kind has its own attach-vector helper. BullMQ's
+// named-job routing dispatches to the right handler in the worker.
+export type EmbedItemsBatchJobData = {
+  tenantId: string;
+  itemIds: string[];
+};
+export type EmbedQnaBatchJobData = {
+  tenantId: string;
+  qnaIds: string[];
+};
 
 export type IngestJobName = "crawl-website" | "parse-file" | "ping";
 export type IngestJobData = CrawlWebsiteJobData | ParseFileJobData | PingJobData;
 
-export type EmbedJobName = "embed-batch";
-export type EmbedJobData = EmbedBatchJobData;
+export type EmbedJobName = "embed-batch" | "embed-items-batch" | "embed-qna-batch";
+export type EmbedJobData =
+  | EmbedBatchJobData
+  | EmbedItemsBatchJobData
+  | EmbedQnaBatchJobData;
 
 /**
  * Default job options shared across producers. 5 attempts with exponential

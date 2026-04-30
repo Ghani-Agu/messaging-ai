@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma, type QnaPair } from "@prisma/client";
 import { prisma } from "./client";
 import { SUPPORTED_LANGUAGES } from "@/lib/validators";
+import { enqueueEmbedQna } from "@/server/queue/jobs";
 
 /**
  * QnaPair (Phase 8b — Type 3: authoritative Q&A).
@@ -113,8 +114,9 @@ export async function createQnaPair(args: {
 }): Promise<{ id: string }> {
   const data = qnaPairInputSchema.parse(args.input);
   const normalizedQuestion = normalizeQuestion(data.question);
+  let created: { id: string };
   try {
-    return await prisma.qnaPair.create({
+    created = await prisma.qnaPair.create({
       data: {
         tenantId: args.tenantId,
         question: data.question,
@@ -140,6 +142,11 @@ export async function createQnaPair(args: {
     }
     throw err;
   }
+  // Phase 8c: enqueue embedding of the question text. The worker embeds
+  // with inputType: "query" since this vector is matched against incoming
+  // customer queries (asymmetric retrieval; see workers/embed.ts).
+  await enqueueEmbedQna({ tenantId: args.tenantId, qnaIds: [created.id] });
+  return created;
 }
 
 export async function updateQnaPair(args: {
@@ -184,6 +191,17 @@ export async function updateQnaPair(args: {
     }
     throw err;
   }
+  // Phase 8c: clear the existing embedding and re-enqueue. Without the
+  // NULL flip, the worker's `AND questionEmbedding IS NULL` idempotency
+  // guard would short-circuit and the vector would stay stale on the old
+  // question text.
+  await prisma.$executeRaw`
+    UPDATE "QnaPair"
+       SET "questionEmbedding" = NULL
+     WHERE "id" = ${args.qnaId}
+       AND "tenantId" = ${args.tenantId}
+  `;
+  await enqueueEmbedQna({ tenantId: args.tenantId, qnaIds: [args.qnaId] });
 }
 
 export async function deleteQnaPair(args: {
@@ -282,6 +300,53 @@ export async function listUnembeddedQnaIds(args: {
      ORDER BY "createdAt" ASC
   `;
   return rows.map((r) => r.id);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Retrieval (Phase 8c)
+//
+// Q&A retrieval is vector-only: questions are short, and what we want to
+// match is "this customer is asking the same thing as a known question."
+// Lexical adds little signal here and would noise the high-confidence
+// authoritative-match path. Threshold filtering happens at the caller
+// (the retriever module reads QNA_MATCH_THRESHOLD from limits.ts).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type RawQnaHit = {
+  qnaId: string;
+  question: string;
+  answer: string;
+  language: string | null;
+  languageLock: boolean;
+  tags: string[];
+  score: number;
+};
+
+import { HNSW_EF_SEARCH } from "@/server/knowledge/limits";
+
+export async function vectorSearchQna(args: {
+  tenantId: string;
+  queryVector: number[];
+  limit: number;
+}): Promise<RawQnaHit[]> {
+  const literal = "[" + args.queryVector.join(",") + "]";
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL hnsw.ef_search = ${HNSW_EF_SEARCH}`);
+    return tx.$queryRaw<RawQnaHit[]>`
+      SELECT q."id"           AS "qnaId",
+             q."question"     AS "question",
+             q."answer"       AS "answer",
+             q."language"     AS "language",
+             q."languageLock" AS "languageLock",
+             q."tags"         AS "tags",
+             1 - (q."questionEmbedding" <=> ${literal}::vector) AS "score"
+        FROM "QnaPair" q
+       WHERE q."tenantId" = ${args.tenantId}
+         AND q."questionEmbedding" IS NOT NULL
+       ORDER BY q."questionEmbedding" <=> ${literal}::vector ASC
+       LIMIT ${args.limit}
+    `;
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

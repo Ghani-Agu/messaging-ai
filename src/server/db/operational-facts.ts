@@ -29,6 +29,7 @@ import {
 export {
   DAY_OF_WEEK,
   TIER1_KEYS,
+  detectTier2Relevance,
   operationalFactsContactSchema,
   operationalFactsDataSchema,
   operationalFactsExceptionSchema,
@@ -38,6 +39,7 @@ export {
   operationalFactsTier1Schema,
   operationalFactsTier2Schema,
   parseOperationalFactsData,
+  pickRelevantTier2,
   pickTier1,
 } from "@/lib/operational-facts";
 export type {
@@ -49,6 +51,7 @@ export type {
   OperationalFactsLocation,
   OperationalFactsTier1,
   OperationalFactsTier2,
+  Tier2RelevanceFlags,
 } from "@/lib/operational-facts";
 
 // ─────────────────────────────────────────────────────────────────────────────

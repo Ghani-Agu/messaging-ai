@@ -158,3 +158,107 @@ export function parseOperationalFactsData(raw: unknown): OperationalFactsData {
   if (!parsed.success) return {};
   return parsed.data;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tier-2 retrieval — keyword-based intent gates (Phase 8c)
+//
+// OperationalFacts has no per-field embedding (one row per tenant); the
+// orchestrator decides which tier-2 fields to inject into Block C based on
+// keyword presence in the customer's message. Pure regex match in 4
+// languages (AR/FR/EN/Darija) with both Latin transliterations (Arabizi)
+// and Arabic-script forms.
+//
+// Imperfect but transparent — operators can tell why a fact was/wasn't
+// injected by looking at the source. Upgrade path (vN+1): embed each tier-2
+// field per tenant once, do similarity matching against the question
+// embedding for finer intent.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Each intent has TWO regexes — one for ASCII / Latin (with \b word
+// boundaries, since \w is ASCII-only in JS's default regex) and one for
+// Arabic-script (substring match, no \b, since Arabic letters aren't in
+// \w and \b around them is unreliable). The detector ORs both — either
+// match flips the flag.
+//
+// Latin set covers English, French, and Algerian Darija romanization
+// (Arabizi: tsa3ru / ch7al / kifash etc.). Arabic set uses distinctive
+// root fragments rather than full inflected forms so we catch
+// conjugations (e.g. توصل matches توصلون, يوصل, etc.).
+
+// Hours intent ─────────────────────────────────────────────────────────
+const HOURS_LATIN_RE =
+  /\b(hour|hours|time|open|closed|opening|closing|heure|heures|horaire|horaires|ouverture|fermeture|ouvert|ferm[eé]|wakt|waqt|kifash|kifesh)\b/i;
+const HOURS_ARABIC_RE = /ساعات|وقت|متى|تفتح/;
+
+// Locations intent ─────────────────────────────────────────────────────
+const LOCATIONS_LATIN_RE =
+  /\b(where|location|locations|address|addresses|branch|branches|store|stores|adresse|adresses|magasin|magasins|branche|emplacement|win|fin)\b/i;
+const LOCATIONS_ARABIC_RE = /عنوان|أين|فين|موقع|محل/;
+
+// Currency / pricing intent ────────────────────────────────────────────
+const CURRENCY_LATIN_RE =
+  /\b(price|prices|cost|costs|currency|payment|prix|co[uû]t|co[uû]ts|monnaie|paiement|tsa3ru|tsa3rou|tha7sebli|ch7al)\b/i;
+const CURRENCY_ARABIC_RE = /سعر|أسعار|دفع|عملة|ثمن/;
+
+// Service-area intent (delivery / coverage) ────────────────────────────
+const SERVICE_AREA_LATIN_RE =
+  /\b(deliver|delivery|ship|shipping|coverage|cover|service area|wilaya|livraison|livrer|exp[eé]dition|twasloo|twasel|twassel)\b/i;
+// `توصل` covers توصلون / يوصل / موصل (verb conjugations); `توصيل`
+// covers the noun form (التوصيل / التوصيلات).
+const SERVICE_AREA_ARABIC_RE = /توصيل|توصل|شحن|ولاية|منطقة/;
+
+// Exceptions intent: holiday / specific date queries fall under hours
+// intent today — once an operator asks about exception editing in v1.1
+// we'll surface it as a separate gate.
+
+export type Tier2RelevanceFlags = {
+  hours: boolean;
+  locations: boolean;
+  exceptions: boolean;
+  currency: boolean;
+  serviceArea: boolean;
+};
+
+/**
+ * Decide which tier-2 fields the customer's message likely wants.
+ *
+ * Pure function — no I/O. Used by the orchestrator's Block C builder to
+ * gate which fact slices get injected (per Gate-1 K5: tier-2 only when
+ * relevant, never always).
+ *
+ * Returns all-false on empty / unrecognized input — the brain proceeds
+ * with no operational facts in Block C.
+ */
+export function detectTier2Relevance(message: string): Tier2RelevanceFlags {
+  const m = message ?? "";
+  const hours = HOURS_LATIN_RE.test(m) || HOURS_ARABIC_RE.test(m);
+  return {
+    hours,
+    // Today: exceptions piggyback on hours intent. A customer asking
+    // about hours on a specific date wants both. Operator can override
+    // by editing the prompt template later.
+    exceptions: hours,
+    locations: LOCATIONS_LATIN_RE.test(m) || LOCATIONS_ARABIC_RE.test(m),
+    currency: CURRENCY_LATIN_RE.test(m) || CURRENCY_ARABIC_RE.test(m),
+    serviceArea:
+      SERVICE_AREA_LATIN_RE.test(m) || SERVICE_AREA_ARABIC_RE.test(m),
+  };
+}
+
+/**
+ * Pick the tier-2 slices flagged as relevant. Pure data transform; the
+ * orchestrator hands the result to buildBlockC which renders only
+ * non-undefined fields.
+ */
+export function pickRelevantTier2(
+  data: OperationalFactsData,
+  flags: Tier2RelevanceFlags,
+): OperationalFactsTier2 {
+  const out: OperationalFactsTier2 = {};
+  if (flags.hours && data.hours !== undefined) out.hours = data.hours;
+  if (flags.exceptions && data.exceptions !== undefined) out.exceptions = data.exceptions;
+  if (flags.locations && data.locations !== undefined) out.locations = data.locations;
+  if (flags.currency && data.currency !== undefined) out.currency = data.currency;
+  if (flags.serviceArea && data.serviceArea !== undefined) out.serviceArea = data.serviceArea;
+  return out;
+}
