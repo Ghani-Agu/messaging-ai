@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma, type KnowledgeGap } from "@prisma/client";
 import { prisma } from "./client";
 import { SUPPORTED_LANGUAGES } from "@/lib/validators";
+import { enqueueEmbedKnowledgeGap } from "@/server/queue/jobs";
 
 /**
  * KnowledgeGap (Phase 8b — gap log).
@@ -67,7 +68,7 @@ export async function recordKnowledgeGap(args: {
   input: KnowledgeGapInput;
 }): Promise<{ id: string }> {
   const data = knowledgeGapInputSchema.parse(args.input);
-  return prisma.knowledgeGap.create({
+  const created = await prisma.knowledgeGap.create({
     data: {
       tenantId: args.tenantId,
       question: data.question,
@@ -76,6 +77,23 @@ export async function recordKnowledgeGap(args: {
     },
     select: { id: true },
   });
+  // Phase 8g: enqueue the embed + cluster job. The webhook handler that
+  // calls this function uses fire-and-forget, so a failure to enqueue
+  // (Redis hiccup) shouldn't block the customer reply — wrap in a
+  // try/catch and let the worker reconcile via listUnclusteredGaps later
+  // if needed (no backfill scaffold today; flagged for future).
+  try {
+    await enqueueEmbedKnowledgeGap({
+      tenantId: args.tenantId,
+      gapIds: [created.id],
+    });
+  } catch (err) {
+    console.warn(
+      `[recordKnowledgeGap] failed to enqueue embed/cluster for gap=${created.id}:`,
+      err,
+    );
+  }
+  return created;
 }
 
 export async function deleteKnowledgeGap(args: {
@@ -185,4 +203,251 @@ export async function setKnowledgeGapClusterKey(args: {
     where: { id: args.gapId },
     data: { clusterKey: args.clusterKey },
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Greedy clustering (Phase 8g)
+//
+// Cluster-on-write: when a new gap is embedded, the worker calls these
+// helpers to find a candidate cluster. Per Gate-1 P8g: hard cap at 500
+// candidate comparisons per insert; above the cap the worker skips
+// clustering and leaves clusterKey null (digest UI surfaces backlog).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Count gaps with embeddings in the clustering window (last N days)
+ * for the tenant, EXCLUDING the new gap itself. Used by the worker to
+ * decide whether to run clustering or skip past the candidate cap.
+ *
+ * Counts both clustered and unclustered candidates because new gaps can
+ * either join an existing cluster (when the best match has a clusterKey)
+ * or seed a new one (when the best match doesn't, or no match clears
+ * the threshold).
+ */
+export async function countClusterCandidates(args: {
+  tenantId: string;
+  excludeGapId: string;
+  sinceDays: number;
+}): Promise<number> {
+  const since = new Date(Date.now() - args.sinceDays * 24 * 60 * 60 * 1000);
+  const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+    SELECT COUNT(*)::bigint AS count
+      FROM "KnowledgeGap"
+     WHERE "tenantId" = ${args.tenantId}
+       AND "id" != ${args.excludeGapId}
+       AND "embedding" IS NOT NULL
+       AND "createdAt" >= ${since}
+  `;
+  return Number(rows[0]?.count ?? 0);
+}
+
+/**
+ * Find the single best-similarity candidate gap in the window (cap-bounded).
+ * Returns null when no candidate clears the threshold — the caller then
+ * mints a fresh clusterKey for the new gap.
+ *
+ * The query joins back the candidate's clusterKey so the worker can
+ * decide:
+ *   - candidate.clusterKey IS NOT NULL → assign the new gap that key
+ *     (joining an existing cluster).
+ *   - candidate.clusterKey IS NULL → mint a new key, assign to BOTH
+ *     the new gap and this candidate (seeding a fresh cluster).
+ *
+ * The LIMIT is the per-insert candidate cap; with 500 candidates max,
+ * pgvector's HNSW gives sub-millisecond per-query lookup.
+ */
+export async function findBestClusterCandidate(args: {
+  tenantId: string;
+  excludeGapId: string;
+  queryVector: number[];
+  threshold: number;
+  sinceDays: number;
+  limit: number;
+}): Promise<{
+  gapId: string;
+  clusterKey: string | null;
+  score: number;
+} | null> {
+  const since = new Date(Date.now() - args.sinceDays * 24 * 60 * 60 * 1000);
+  const literal = "[" + args.queryVector.join(",") + "]";
+  // The HNSW index on KnowledgeGap.embedding (raw SQL in P8a migration)
+  // serves the ORDER BY. ef_search isn't critical at this candidate
+  // pool size — we cap at 500 by LIMIT regardless.
+  const rows = await prisma.$queryRaw<
+    Array<{ gapId: string; clusterKey: string | null; score: number }>
+  >`
+    SELECT "id"        AS "gapId",
+           "clusterKey",
+           1 - ("embedding" <=> ${literal}::vector) AS "score"
+      FROM "KnowledgeGap"
+     WHERE "tenantId" = ${args.tenantId}
+       AND "id" != ${args.excludeGapId}
+       AND "embedding" IS NOT NULL
+       AND "createdAt" >= ${since}
+     ORDER BY "embedding" <=> ${literal}::vector ASC
+     LIMIT ${args.limit}
+  `;
+  if (rows.length === 0) return null;
+  const best = rows[0]!;
+  if (best.score < args.threshold) return null;
+  return best;
+}
+
+/**
+ * Read a gap's question + embedding state for the worker to embed.
+ * Worker-side helper; trusts the job's tenantId.
+ */
+export async function getGapForEmbedding(gapId: string): Promise<{
+  id: string;
+  tenantId: string;
+  question: string;
+  hasEmbedding: boolean;
+} | null> {
+  const rows = await prisma.$queryRaw<
+    Array<{
+      id: string;
+      tenantId: string;
+      question: string;
+      hasEmbedding: boolean;
+    }>
+  >`
+    SELECT "id", "tenantId", "question",
+           ("embedding" IS NOT NULL) AS "hasEmbedding"
+      FROM "KnowledgeGap"
+     WHERE "id" = ${gapId}
+  `;
+  return rows[0] ?? null;
+}
+
+/**
+ * Cluster-resolution helpers (used by the digest UI's "Create Q&A from
+ * gap" CTA — when the operator answers the gap, every gap in the
+ * cluster gets resolved=true).
+ */
+export async function markClusterResolved(args: {
+  tenantId: string;
+  clusterKey: string;
+}): Promise<{ count: number }> {
+  const result = await prisma.knowledgeGap.updateMany({
+    where: { tenantId: args.tenantId, clusterKey: args.clusterKey, resolved: false },
+    data: { resolved: true, resolvedAt: new Date() },
+  });
+  return { count: result.count };
+}
+
+/**
+ * Single-gap resolution — used when the operator marks a single
+ * unclustered gap resolved (skipped-clustering backlog).
+ */
+export async function markSingleGapResolvedById(args: {
+  tenantId: string;
+  gapId: string;
+}): Promise<void> {
+  const result = await prisma.knowledgeGap.updateMany({
+    where: { id: args.gapId, tenantId: args.tenantId },
+    data: { resolved: true, resolvedAt: new Date() },
+  });
+  if (result.count === 0) throw new Error("Gap not found");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cluster digest reads (Phase 8g)
+//
+// `loadGapClusters` returns one row per active cluster with the
+// representative question (most-recent question text in the cluster)
+// + member count + latest-seen timestamp. The digest UI shows these
+// alongside an "Unclustered" section for gaps the worker skipped past
+// the candidate cap.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type GapClusterSummary = {
+  clusterKey: string;
+  representativeQuestion: string;
+  representativeGapId: string;
+  language: string | null;
+  count: number;
+  lastSeenAt: Date;
+  firstSeenAt: Date;
+};
+
+export async function loadGapClusters(args: {
+  tenantId: string;
+  sinceDays?: number;
+}): Promise<GapClusterSummary[]> {
+  const sinceDays = args.sinceDays ?? 30;
+  const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
+  // Per cluster: count + latest member + earliest member. The latest
+  // member is the cluster's "representative" question (most recent
+  // phrasing the customer used).
+  const rows = await prisma.$queryRaw<
+    Array<{
+      clusterKey: string;
+      representativeQuestion: string;
+      representativeGapId: string;
+      language: string | null;
+      count: bigint;
+      lastSeenAt: Date;
+      firstSeenAt: Date;
+    }>
+  >`
+    SELECT g."clusterKey",
+           latest."question"      AS "representativeQuestion",
+           latest."id"            AS "representativeGapId",
+           latest."language"      AS "language",
+           COUNT(*)::bigint       AS "count",
+           MAX(g."createdAt")     AS "lastSeenAt",
+           MIN(g."createdAt")     AS "firstSeenAt"
+      FROM "KnowledgeGap" g
+      JOIN LATERAL (
+        SELECT g2."id", g2."question", g2."language"
+          FROM "KnowledgeGap" g2
+         WHERE g2."tenantId" = g."tenantId"
+           AND g2."clusterKey" = g."clusterKey"
+         ORDER BY g2."createdAt" DESC
+         LIMIT 1
+      ) latest ON TRUE
+     WHERE g."tenantId" = ${args.tenantId}
+       AND g."clusterKey" IS NOT NULL
+       AND g."resolved" = false
+       AND g."createdAt" >= ${since}
+     GROUP BY g."clusterKey", latest."id", latest."question", latest."language"
+     ORDER BY MAX(g."createdAt") DESC
+  `;
+  return rows.map((r) => ({
+    clusterKey: r.clusterKey,
+    representativeQuestion: r.representativeQuestion,
+    representativeGapId: r.representativeGapId,
+    language: r.language,
+    count: Number(r.count),
+    lastSeenAt: r.lastSeenAt,
+    firstSeenAt: r.firstSeenAt,
+  }));
+}
+
+export type UnclusteredGapSummary = {
+  id: string;
+  question: string;
+  language: string | null;
+  createdAt: Date;
+};
+
+export async function loadUnclusteredGaps(args: {
+  tenantId: string;
+  sinceDays?: number;
+  limit?: number;
+}): Promise<UnclusteredGapSummary[]> {
+  const sinceDays = args.sinceDays ?? 30;
+  const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
+  const rows = await prisma.knowledgeGap.findMany({
+    where: {
+      tenantId: args.tenantId,
+      clusterKey: null,
+      resolved: false,
+      createdAt: { gte: since },
+    },
+    select: { id: true, question: true, language: true, createdAt: true },
+    orderBy: { createdAt: "desc" },
+    take: args.limit ?? 50,
+  });
+  return rows;
 }

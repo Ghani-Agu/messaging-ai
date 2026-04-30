@@ -99,15 +99,27 @@ export async function enqueueEmbedQna(args: {
 }
 
 /**
- * KnowledgeGap embedding (used by P8g clusterer). Stub kept here so the
- * gap-record call site (caller of runBrain) doesn't need to change when
- * the clusterer lands.
+ * KnowledgeGap embedding + clustering (Phase 8g). Each new gap becomes
+ * one job; the embed-gaps-batch worker handler embeds the question,
+ * attaches the vector, then runs greedy cluster-on-write — see
+ * src/server/queue/workers/embed.ts handleEmbedGapsBatch for the
+ * cluster algorithm + the GAP_CLUSTER_CANDIDATE_CAP fallback.
+ *
+ * Single-gap calls are normal (gaps arrive one at a time from
+ * webhook handlers); a `gapIds` array signature is kept for symmetry
+ * with the items / qna paths and to support backfill scripts later.
  */
 export async function enqueueEmbedKnowledgeGap(args: {
-  gapId: string;
   tenantId: string;
+  gapIds: string[];
 }): Promise<void> {
-  // No-op until P8g (gap clustering).
-  void args;
-  return;
+  if (args.gapIds.length === 0) return;
+  for (let i = 0; i < args.gapIds.length; i += EMBED_BATCH_SIZE) {
+    const batch = args.gapIds.slice(i, i + EMBED_BATCH_SIZE);
+    await embedQueue.add(
+      "embed-gaps-batch",
+      { tenantId: args.tenantId, gapIds: batch },
+      DEFAULT_JOB_OPTIONS,
+    );
+  }
 }

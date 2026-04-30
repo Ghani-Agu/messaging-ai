@@ -1,10 +1,12 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import { Prisma } from "@prisma/client";
 import { createRedisConnection } from "../connection";
 import {
   EMBED_QUEUE_NAME,
   type EmbedBatchJobData,
+  type EmbedGapsBatchJobData,
   type EmbedItemsBatchJobData,
   type EmbedJobData,
   type EmbedJobName,
@@ -24,6 +26,18 @@ import {
   buildItemEmbedText,
 } from "@/server/db/items";
 import { attachQnaEmbedding } from "@/server/db/qna";
+import {
+  attachGapEmbedding,
+  countClusterCandidates,
+  findBestClusterCandidate,
+  getGapForEmbedding,
+  setKnowledgeGapClusterKey,
+} from "@/server/db/knowledge-gaps";
+import {
+  GAP_CLUSTER_CANDIDATE_CAP,
+  GAP_CLUSTER_THRESHOLD,
+  GAP_CLUSTER_WINDOW_DAYS,
+} from "@/server/knowledge/limits";
 import { prisma } from "@/server/db/client";
 
 /**
@@ -50,6 +64,10 @@ export function startEmbedWorker(): Worker<EmbedJobData, unknown, EmbedJobName> 
         case "embed-qna-batch":
           return handleEmbedQnaBatch(
             job as Job<EmbedQnaBatchJobData, unknown, "embed-qna-batch">,
+          );
+        case "embed-gaps-batch":
+          return handleEmbedGapsBatch(
+            job as Job<EmbedGapsBatchJobData, unknown, "embed-gaps-batch">,
           );
         default: {
           const exhaustive: never = job.name;
@@ -255,5 +273,145 @@ async function handleEmbedQnaBatch(
     });
   }
   return { embedded: usable.length };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 8g — knowledge-gap embedding + cluster-on-write
+//
+// Each new KnowledgeGap row triggers one job here. The handler:
+//   1. Embeds the question (inputType: "query" — same asymmetric path
+//      as Q&A, since gaps are matched against future incoming questions
+//      when the operator answers one).
+//   2. Attaches the embedding via raw SQL.
+//   3. Runs greedy cluster-on-write — finds the best similar gap in the
+//      last GAP_CLUSTER_WINDOW_DAYS for the tenant, capped at
+//      GAP_CLUSTER_CANDIDATE_CAP comparisons. Above the cap the
+//      worker SKIPS clustering (clusterKey stays null) and logs a
+//      structured warning; the digest UI shows backlog.
+//
+// Cluster join rule:
+//   - Best candidate has a clusterKey → new gap inherits it (joining
+//     an existing cluster).
+//   - Best candidate has null clusterKey → mint a fresh clusterKey,
+//     assign to BOTH the new gap AND the candidate (seeding a new
+//     two-member cluster from two previously-orphaned similar gaps).
+//   - No candidate clears GAP_CLUSTER_THRESHOLD → mint a fresh
+//     clusterKey, assign only to the new gap (sole-member cluster
+//     waiting for a similar gap to arrive).
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function handleEmbedGapsBatch(
+  job: Job<EmbedGapsBatchJobData, unknown, "embed-gaps-batch">,
+): Promise<{ embedded: number; clustered: number; skipped: number }> {
+  const { tenantId, gapIds } = job.data;
+  let embedded = 0;
+  let clustered = 0;
+  let skipped = 0;
+  // Process gaps sequentially. Per-gap clustering depends on the latest
+  // candidate state, including any gaps just-clustered earlier in the
+  // same batch. Sequential keeps the reads consistent.
+  for (const gapId of gapIds) {
+    const gap = await getGapForEmbedding(gapId);
+    if (!gap || gap.tenantId !== tenantId) continue;
+    if (gap.hasEmbedding) {
+      // Idempotency: already embedded in a prior run. Still re-run the
+      // cluster step in case it was skipped due to cap pressure earlier.
+      const did = await runClusterStep(tenantId, gapId);
+      if (did === "clustered") clustered++;
+      else if (did === "skipped") skipped++;
+      continue;
+    }
+
+    // Embed (single-item batch is fine; per-call provider RTT dominates
+    // anyway and gap insertions are sparse).
+    const result = await embed({
+      inputs: [gap.question],
+      inputType: "query",
+    });
+    await attachGapEmbedding({ gapId: gap.id, vector: result.vectors[0]! });
+    embedded++;
+
+    // Cluster.
+    const did = await runClusterStep(tenantId, gapId);
+    if (did === "clustered") clustered++;
+    else if (did === "skipped") skipped++;
+  }
+  return { embedded, clustered, skipped };
+}
+
+async function runClusterStep(
+  tenantId: string,
+  gapId: string,
+): Promise<"clustered" | "skipped" | "no-candidate"> {
+  // Cap check first — count is a cheap COUNT(*) against the same
+  // composite index the candidate query would use.
+  const candidates = await countClusterCandidates({
+    tenantId,
+    excludeGapId: gapId,
+    sinceDays: GAP_CLUSTER_WINDOW_DAYS,
+  });
+  if (candidates > GAP_CLUSTER_CANDIDATE_CAP) {
+    console.warn(
+      `[embed-gaps] tenant=${tenantId} gap=${gapId}: skipping clustering — ` +
+        `${candidates} candidates exceeds cap ${GAP_CLUSTER_CANDIDATE_CAP}. ` +
+        `clusterKey left null; digest UI will surface this gap in the unclustered backlog.`,
+    );
+    return "skipped";
+  }
+
+  // Re-load the gap's vector for the candidate query. We don't pass it
+  // through from the embed step because clustering is also called for
+  // already-embedded re-runs (idempotent path), where we don't have the
+  // vector in memory.
+  const vec = await prisma.$queryRaw<Array<{ vec: string }>>`
+    SELECT "embedding"::text AS vec FROM "KnowledgeGap"
+     WHERE "id" = ${gapId} AND "embedding" IS NOT NULL
+  `;
+  if (vec.length === 0) return "no-candidate"; // shouldn't happen — caller
+                                                 // path always attaches first.
+  const queryVector = parsePgVector(vec[0]!.vec);
+
+  const best = await findBestClusterCandidate({
+    tenantId,
+    excludeGapId: gapId,
+    queryVector,
+    threshold: GAP_CLUSTER_THRESHOLD,
+    sinceDays: GAP_CLUSTER_WINDOW_DAYS,
+    limit: GAP_CLUSTER_CANDIDATE_CAP,
+  });
+
+  if (!best) {
+    // No similar gap → mint a sole-member cluster. New gaps that arrive
+    // similar to this one will join via the candidate-has-clusterKey
+    // branch.
+    const fresh = randomUUID();
+    await setKnowledgeGapClusterKey({ gapId, clusterKey: fresh });
+    return "clustered";
+  }
+
+  if (best.clusterKey) {
+    // Join an existing cluster.
+    await setKnowledgeGapClusterKey({ gapId, clusterKey: best.clusterKey });
+    return "clustered";
+  }
+
+  // Both gaps unclustered — seed a new cluster from this pair.
+  const fresh = randomUUID();
+  await setKnowledgeGapClusterKey({ gapId, clusterKey: fresh });
+  await setKnowledgeGapClusterKey({ gapId: best.gapId, clusterKey: fresh });
+  return "clustered";
+}
+
+/**
+ * Parse pgvector's text form `[a,b,c,...]` back into a number[]. The
+ * cluster step reads the gap's embedding back via raw SQL because
+ * Prisma can't bind Unsupported(...) columns.
+ */
+function parsePgVector(text: string): number[] {
+  // Strip the brackets and split on comma. Trim per-element to handle
+  // any whitespace pgvector might insert.
+  const inner = text.replace(/^\[/, "").replace(/\]$/, "");
+  if (!inner) return [];
+  return inner.split(",").map((s) => Number.parseFloat(s.trim()));
 }
 

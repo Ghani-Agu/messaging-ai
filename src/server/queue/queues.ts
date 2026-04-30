@@ -52,15 +52,28 @@ export type EmbedQnaBatchJobData = {
   tenantId: string;
   qnaIds: string[];
 };
+// Phase 8g — knowledge-gap embedding + clustering. The worker handler
+// embeds the gap question, attaches the vector, then runs greedy
+// clustering (assigns clusterKey) — all in one job per gap so the
+// digest can show clusters as new gaps arrive.
+export type EmbedGapsBatchJobData = {
+  tenantId: string;
+  gapIds: string[];
+};
 
 export type IngestJobName = "crawl-website" | "parse-file" | "ping";
 export type IngestJobData = CrawlWebsiteJobData | ParseFileJobData | PingJobData;
 
-export type EmbedJobName = "embed-batch" | "embed-items-batch" | "embed-qna-batch";
+export type EmbedJobName =
+  | "embed-batch"
+  | "embed-items-batch"
+  | "embed-qna-batch"
+  | "embed-gaps-batch";
 export type EmbedJobData =
   | EmbedBatchJobData
   | EmbedItemsBatchJobData
-  | EmbedQnaBatchJobData;
+  | EmbedQnaBatchJobData
+  | EmbedGapsBatchJobData;
 
 /**
  * Default job options shared across producers. 5 attempts with exponential

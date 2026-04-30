@@ -51,6 +51,26 @@ export const MAX_QNA_PER_TENANT = 1_000;
 // staleness; verification is purely operator-driven.
 export const DOCUMENT_STALE_AFTER_DAYS = 45;
 
+// Knowledge-gap clustering (Phase 8g).
+//
+// When a new gap arrives, the embed-gaps-batch worker runs greedy
+// cluster-on-write: it compares the new gap against recent in-window
+// candidates and either joins an existing cluster (when best similarity
+// > GAP_CLUSTER_THRESHOLD) or starts a new sole-member cluster.
+//
+// Hard cap on candidate set per insert — protects against O(N) per-gap
+// blow-up when a tenant has high gap volume. When the in-window set
+// exceeds this cap, clustering is skipped for the new gap (clusterKey
+// stays null) and a structured warning is logged. The digest UI
+// surfaces "N unclustered gaps" so operators see the unprocessed
+// backlog rather than silently degraded clustering.
+//
+// Window (30 days) bounds the digest period — older gaps fall out of
+// scope so the dashboard doesn't accumulate stale entries.
+export const GAP_CLUSTER_THRESHOLD = 0.85;
+export const GAP_CLUSTER_CANDIDATE_CAP = 500;
+export const GAP_CLUSTER_WINDOW_DAYS = 30;
+
 // Q&A authoritative-match thresholds — two-tier (Phase 8e-3 override).
 //
 // Cosine-similarity floor on the question embedding. Matches above the
