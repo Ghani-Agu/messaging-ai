@@ -139,16 +139,20 @@ That gap is intentional — do **not** "fix" it by adding a non-HNSW `@@index([e
 
 The same script checks the GENERATED `searchVector` column — also added via raw SQL since Prisma's `@default(dbgenerated(...))` doesn't actually emit `GENERATED ALWAYS AS ... STORED`. Run it whenever the Knowledge schema changes.
 
-### Phase 3: knowledge migration workflow
+### Phase 3 / 8a: knowledge migration workflow
 
-For any change touching `KnowledgeChunk` / `KnowledgeSource`:
+For any change touching `KnowledgeChunk` / `KnowledgeSource` / `KnowledgeItem` / `QnaPair` / `OperationalFacts` / `KnowledgeGap`:
 
 1. Edit `prisma/schema.prisma`.
 2. `npm run db:migrate -- --create-only --name <descriptive-name>`.
-3. Open the generated `migration.sql`. Strip any `DROP INDEX "KnowledgeChunk_embedding_hnsw"` and any `ALTER COLUMN "searchVector"` Prisma slips in (both come from PSL/DB drift, not your edit).
+3. Open the generated `migration.sql`. Strip any `DROP INDEX` line targeting one of the names in the strip list above (they come from PSL/DB drift, not your edit). Strip any `ALTER COLUMN "searchVector"` Prisma slips in.
 4. Add custom raw SQL for any new HNSW / GENERATED column work.
 5. `npm run db:migrate` to apply.
-6. `npx dotenv -e .env.local -- node scripts/verify-knowledge-schema.mjs` to confirm.
+6. Run BOTH verify scripts to confirm:
+    - `npx dotenv -e .env.local -- node scripts/verify-knowledge-schema.mjs` (Phase 3 — KnowledgeSource/Chunk).
+    - `npx dotenv -e .env.local -- node scripts/verify-typed-knowledge-schema.mjs` (Phase 8a — Item/QnaPair/OpFacts/Gap).
+
+**Phase 8a recovery note: when migrate-dev refuses on the Phase 7a checksum drift,** use `prisma migrate diff --from-schema-datasource ... --to-schema-datamodel ... --script` to generate the SQL (read-only, no shadow DB, no drift prompt, no pre-flight pending-apply pass). Then hand-write the migration directory and apply via `db:migrate:deploy`. Reference: `20260430000000_phase8a_typed_knowledge_tables/migration.sql` was generated this way and documents the three deviations that had to be applied on top of the diff (strip DROP INDEX, hand-write the GENERATED ALWAYS clause for `KnowledgeItem.searchVector`, append HNSW indexes).
 
 ### Prisma migrate dev: drift prompt + DROP INDEX inspection
 
@@ -166,6 +170,9 @@ Two interactive surprises around `prisma migrate dev`. Both stem from the same r
 - `Channel_whatsapp_phoneNumberId_unique` — partial unique on `config->>'phoneNumberId'` where `type='WHATSAPP'` (Phase 6a).
 - `Channel_messenger_pageId_unique` — partial unique on `config->>'pageId'` where `type='MESSENGER'` (Phase 7a).
 - `Channel_instagram_igUserId_unique` — partial unique on `config->>'igUserId'` where `type='INSTAGRAM'` (Phase 7a).
+- `KnowledgeItem_embedding_hnsw` — HNSW on `KnowledgeItem.embedding` (Phase 8a).
+- `QnaPair_questionEmbedding_hnsw` — HNSW on `QnaPair.questionEmbedding` (Phase 8a).
+- `KnowledgeGap_embedding_hnsw` — HNSW on `KnowledgeGap.embedding` (Phase 8a).
 - Any future raw-SQL index added the same way — when you add one, add it to this list too.
 
 In current observed behavior, only the HNSW index actually triggers a generated `DROP INDEX` line (the partial-unique-on-JSON ones are "missing in PSL but not extra in DB" from Prisma's perspective, so the diff engine doesn't try to drop them). The other entries are defensive — if Prisma's diff behavior changes or some edge case generates a drop for them, the rule covers it before destructive damage.
@@ -235,6 +242,10 @@ To drive auth-gated pages from `curl` in test/verification scripts (e.g. the Pha
 Dev minted a 24h JWT; the dev server validated it and rendered the auth-gated `/channels` and `/conversations` pages identically to a real session. Useful for CI and curl-based verification harnesses; not committed (the script that does it is a one-off, not infrastructure). Reference: the deleted `scripts/test-phase6-mint-jwt.ts` from the Phase 6 verification pass — pattern only, file no longer in tree. Phase 7's `scripts/verify-phase7.ts` (next subsection) uses the same JWT-forging pattern in step 8.
 
 ### Phase verification harnesses
+
+`scripts/verify-knowledge-schema.mjs` — Phase 3 schema check (KnowledgeSource, KnowledgeChunk, HNSW + GIN, GENERATED searchVector). Run after any migration touching these tables.
+
+`scripts/verify-typed-knowledge-schema.mjs` — Phase 8a schema check (KnowledgeItem, QnaPair, OperationalFacts, KnowledgeGap; weighted GENERATED searchVector on KnowledgeItem; HNSW on the three new vector columns; composite UNIQUEs). Run alongside the Phase 3 verifier after any migration touching the typed-knowledge tables.
 
 `scripts/verify-phase7.ts` — 8-step end-to-end check that exercises the full Messenger + Instagram pipeline against stubs. Run via `npm run verify:phase7`. Pre-requisites: dev server running, `.env.local` has `ENCRYPTION_KEY` + `META_VERIFY_TOKEN` + `DEV_WEBHOOK_SIMULATOR=enabled` + `META_USE_STUB` unset or `true`. After real Meta credentials arrive, the same harness validates the real-API integration — swap `META_USE_STUB=false` / `META_APP_ID=<real>` / `META_APP_SECRET=<real>` in `.env.local` and re-run. The script itself is the source of truth for the verification rules; this section is just a discoverability pointer.
 
