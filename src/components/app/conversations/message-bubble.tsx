@@ -267,6 +267,35 @@ function DeliveryStatusIndicator({
 
 type Citation = MessageAiMetadata["citations"][number];
 
+// Per-kind badge styling — color-codes the citation chips so operators
+// can tell at a glance which knowledge type the AI drew from. Kept tonal
+// (not loud) so chips stay subordinate to the message content.
+//
+// Phase 8c-5: each kind gets a short prefix tag (item / qna / fact /
+// chunk omitted as the default) and an accent color matching its
+// semantic role.
+const KIND_BADGE: Record<
+  Citation["kind"],
+  { tag: string | null; tone: string }
+> = {
+  chunk: {
+    tag: null,
+    tone: "border-[var(--border-subtle)] text-[var(--text-tertiary)]",
+  },
+  item: {
+    tag: "item",
+    tone: "border-[var(--accent-secondary)]/40 text-[var(--accent-secondary)]",
+  },
+  qna: {
+    tag: "qna",
+    tone: "border-[var(--success)]/40 text-[var(--success)]",
+  },
+  operational_fact: {
+    tag: "fact",
+    tone: "border-[var(--warning)]/40 text-[var(--warning)]",
+  },
+};
+
 function CitationStrip({
   citations,
   used,
@@ -285,6 +314,7 @@ function CitationStrip({
         {citations.map((c) => {
           const isUsed = usedSet.has(c.index);
           const isOpen = openIndex === c.index;
+          const badge = KIND_BADGE[c.kind];
           return (
             <button
               key={c.index}
@@ -292,16 +322,26 @@ function CitationStrip({
               aria-expanded={isOpen}
               onClick={() => setOpenIndex(isOpen ? null : c.index)}
               className={cn(
-                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-caption",
+                "inline-flex items-center gap-1 rounded-full border bg-[var(--bg-surface)] px-2 py-0.5 text-caption",
                 "transition-colors duration-150 ease-out",
                 isUsed
                   ? "border-[color-mix(in_oklab,var(--accent-base)_35%,transparent)] bg-[color-mix(in_oklab,var(--accent-base)_15%,transparent)] text-[var(--accent-hover)]"
-                  : "border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-tertiary)]",
+                  : badge.tone,
                 "hover:border-[var(--border-strong)]",
                 isOpen && "border-[var(--accent-base)]",
               )}
             >
               <span className="font-mono">[{c.index}]</span>
+              {badge.tag ? (
+                <span
+                  className={cn(
+                    "rounded-sm px-1 font-mono text-[0.65rem] uppercase tracking-wide",
+                    "bg-[var(--bg-surface-elevated)]",
+                  )}
+                >
+                  {badge.tag}
+                </span>
+              ) : null}
               <span className="max-w-[18ch] truncate">{citationLabel(c)}</span>
             </button>
           );
@@ -309,12 +349,13 @@ function CitationStrip({
       </div>
       {open ? (
         <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 text-body-sm text-[var(--text-secondary)]">
+          <CitationDetailHeader citation={open} />
           {open.kind === "chunk" && open.sourceUrl ? (
             <a
               href={open.sourceUrl}
               target="_blank"
               rel="noreferrer"
-              className="block truncate font-mono text-caption text-[var(--accent-hover)] hover:underline"
+              className="mt-1 block truncate font-mono text-caption text-[var(--accent-hover)] hover:underline"
             >
               {open.sourceUrl}
             </a>
@@ -339,6 +380,45 @@ function CitationStrip({
       ) : null}
     </div>
   );
+}
+
+/**
+ * Per-kind detail header in the open citation panel. Surfaces the most
+ * useful identifier so the operator can recognize the knowledge source
+ * at a glance.
+ */
+function CitationDetailHeader({ citation }: { citation: Citation }) {
+  switch (citation.kind) {
+    case "chunk":
+      return (
+        <div className="text-caption uppercase tracking-wide text-[var(--text-tertiary)]">
+          Document chunk · {citation.sourceName}
+        </div>
+      );
+    case "item": {
+      const bits = [citation.name];
+      if (citation.brand) bits.push(citation.brand);
+      if (citation.sku) bits.push(citation.sku);
+      return (
+        <div className="text-caption uppercase tracking-wide text-[var(--accent-secondary)]">
+          Structured item · {bits.join(" · ")}
+        </div>
+      );
+    }
+    case "qna":
+      return (
+        <div className="text-caption uppercase tracking-wide text-[var(--success)]">
+          Q&amp;A · {citation.question.slice(0, 60)}
+          {citation.question.length > 60 ? "…" : ""}
+        </div>
+      );
+    case "operational_fact":
+      return (
+        <div className="text-caption uppercase tracking-wide text-[var(--warning)]">
+          Operational fact · {citation.field}
+        </div>
+      );
+  }
 }
 
 /**
