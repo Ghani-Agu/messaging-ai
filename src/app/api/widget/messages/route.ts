@@ -202,12 +202,40 @@ export async function POST(req: Request): Promise<Response> {
           conversationId,
           reply: lastResult.reply,
           language: lastResult.language,
-          citations: lastResult.citations.map((c) => ({
-            index: c.index,
-            sourceName: c.sourceName,
-            sourceUrl: c.sourceUrl,
-            preview: c.preview,
-          })),
+          // Phase 8c: BrainResult.citations is now a discriminated union
+          // (chunk | item | qna | operational_fact). Map to a wire shape
+          // that's backward-compatible with the widget client (sourceName
+          // always present; sourceUrl only when meaningful) and additively
+          // includes `kind` so future widget UI can show kind-aware badges.
+          citations: lastResult.citations.map((c) => {
+            const base = { index: c.index, kind: c.kind, preview: c.preview };
+            switch (c.kind) {
+              case "chunk":
+                return {
+                  ...base,
+                  sourceName: c.sourceName,
+                  sourceUrl: c.sourceUrl,
+                };
+              case "item":
+                return {
+                  ...base,
+                  sourceName: c.brand ? `${c.name} (${c.brand})` : c.name,
+                  sourceUrl: undefined as string | undefined,
+                };
+              case "qna":
+                return {
+                  ...base,
+                  sourceName: `Q&A: ${c.question.slice(0, 60)}`,
+                  sourceUrl: undefined as string | undefined,
+                };
+              case "operational_fact":
+                return {
+                  ...base,
+                  sourceName: `Operational fact: ${c.field}`,
+                  sourceUrl: undefined as string | undefined,
+                };
+            }
+          }),
           computedConfidence: lastResult.confidence,
           escalation: lastResult.escalation,
           displayName: serverDisplayName,

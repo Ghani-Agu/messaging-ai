@@ -2,12 +2,28 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db/client";
 import { getVoiceProfile } from "@/lib/validators";
-import { retrieve, type RetrievedChunk } from "@/server/knowledge/retriever";
 import {
+  retrieveChunks,
+  retrieveItems,
+  retrieveQnaMatches,
+  type RetrievedChunk,
+} from "@/server/knowledge/retriever";
+import {
+  detectTier2Relevance,
   getOperationalFacts,
+  pickRelevantTier2,
   pickTier1,
+  type OperationalFactsTier2,
 } from "@/server/db/operational-facts";
-import { buildPrompt, type CitationView, type HistoryTurn } from "./prompts/system";
+import { embed } from "@/server/ai/embeddings";
+import { detectLanguage } from "@/lib/language-detect";
+import {
+  buildPrompt,
+  countTokens,
+  type HistoryTurn,
+  type RenderedCitation,
+  type OperationalFactField,
+} from "./prompts/system";
 import {
   computeConfidence,
   decideEscalation,
@@ -41,15 +57,22 @@ import {
  * always exists; a future `runBrainStream` will join it.
  */
 
-// Performance budgets (Phase-4 Gate-1 §6, bumped in Phase-8b Gate-1).
+// Performance budgets (Phase-4 Gate-1 §6, bumped in Phase-8b/c Gate-1).
 const MAX_REPLY_TOKENS = 600;
-// Bumped 6000 → 8000 in Phase 8b: tier-1 operational facts in Block B and
-// (later) structured Items + Q&A in Block C add headroom pressure that the
-// original Phase-4 budget didn't anticipate. Per-section caps at the
-// builder layer keep the overall envelope under control; this guard
-// remains the last-line failsafe before an API call.
+// Phase 8b bumped 6000 → 8000 for tier-1 ops facts in Block B; Phase 8c
+// keeps 8000 with explicit per-section caps in Block C (items / qna /
+// facts each have their own ceiling enforced via top-K + content trim).
+// Per-section budgets are aspirational; this guard is the last-line
+// failsafe before an API call.
 const MAX_INPUT_TOKEN_HEADROOM = 8000;
-const TOP_K_DEFAULT = 8;
+
+// Per-channel retrieval top-K. Chunks scale down to 5 when items are
+// present (per Gate-1 P8c risk discussion) so the combined Block C stays
+// under the 5500-token A+B+C target asserted in prompts/system.test.ts.
+const TOP_K_CHUNKS_NO_ITEMS = 8;
+const TOP_K_CHUNKS_WITH_ITEMS = 5;
+const TOP_K_ITEMS = 5;
+const TOP_K_QNA = 1; // top-1 above threshold; multi-Q&A blending is post-v1
 const HISTORY_TURNS_DEFAULT = 8;
 
 export type BrainHistoryTurn = HistoryTurn;
@@ -63,19 +86,51 @@ export type BrainInput = {
   topK?: number;
 };
 
-export type BrainCitation = {
-  /** 1-based — matches the index seen in send_reply.citations_used. */
-  index: number;
-  chunkId: string;
-  sourceId: string;
-  sourceName: string;
-  sourceUrl?: string;
-  /** Trimmed preview only — never the full embedding text. */
-  preview: string;
-  /** From the retriever; for diagnostics. */
-  vectorScore: number | null;
-  lexicalScore: number | null;
-};
+/**
+ * BrainResult.citations is a flat array indexed [1]..[N] in Block C, with
+ * a `kind` discriminator per entry so dashboards can render badges and
+ * operators can audit which knowledge type the AI's answer came from
+ * (Gate-1 P8c note 4). Numbering is unified across kinds because Claude's
+ * `send_reply.citations_used` is a single integer array — see
+ * prompts/system.ts for the per-kind rendering shape.
+ */
+export type BrainCitation =
+  | {
+      index: number;
+      kind: "chunk";
+      chunkId: string;
+      sourceId: string;
+      sourceName: string;
+      sourceUrl?: string;
+      preview: string;
+      vectorScore: number | null;
+      lexicalScore: number | null;
+    }
+  | {
+      index: number;
+      kind: "item";
+      itemId: string;
+      name: string;
+      brand: string | null;
+      sku: string | null;
+      preview: string;
+      vectorScore: number | null;
+      lexicalScore: number | null;
+    }
+  | {
+      index: number;
+      kind: "qna";
+      qnaId: string;
+      question: string;
+      preview: string;
+      score: number;
+    }
+  | {
+      index: number;
+      kind: "operational_fact";
+      field: OperationalFactField;
+      preview: string;
+    };
 
 export type BrainResult = {
   reply: string;
@@ -113,12 +168,12 @@ export type BrainResult = {
  */
 export async function runBrain(input: BrainInput): Promise<BrainResult> {
   const { tenantId, message } = input;
-  const topK = input.topK ?? TOP_K_DEFAULT;
+  const trimmedMessage = message.trim();
   const history = (input.history ?? []).slice(-HISTORY_TURNS_DEFAULT);
 
-  // Load tenant + facts in parallel — both are independent reads against
-  // tenantId. The retriever fires once we know the query (still in-band
-  // here so a missing tenant short-circuits before we burn embedding cost).
+  // Load tenant + facts in parallel — both are independent reads keyed by
+  // tenantId. We don't start retrieval here yet because we want a fast
+  // tenant-not-found error before burning embedding cost.
   const [tenant, factsData] = await Promise.all([
     prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -128,40 +183,188 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
   ]);
   if (!tenant) throw new Error(`tenant not found: ${tenantId}`);
   const voice = getVoiceProfile(tenant.settings as Prisma.JsonValue);
-  // Tier-1 only — tier-2 (hours/locations/exceptions) flows into Block C
-  // via retrieval when that pass lands; for P8b it's editable but invisible
-  // to the brain, per Gate-1 K5.
   const operationalFactsTier1 = pickTier1(factsData);
 
-  const retrieved: RetrievedChunk[] = await retrieve({
+  // Embed the query ONCE and share the vector across all three retrieval
+  // channels (chunks / items / qna). Saves 2 embed API calls per turn.
+  const queryEmbedding = await embed({
+    inputs: [trimmedMessage],
+    inputType: "query",
+  });
+  const queryVector = queryEmbedding.vectors[0]!;
+
+  // Pre-Claude language detection feeds Q&A languageLock filtering.
+  // Claude reports its own self-detected language in send_reply.language
+  // afterward — we use that as the authoritative reply-language signal.
+  const detectedLanguage = detectLanguage(trimmedMessage);
+
+  // Decide chunk top-K based on whether items are likely to be relevant.
+  // Conservative: we don't know yet whether items WILL be returned, but
+  // using the lower top-K when items might fire keeps the budget tight.
+  // The override hits when the tenant has zero items (countItems would
+  // tell us but is an extra round-trip; the cheap check is "did items
+  // come back from retrieval"). Today we use the lower number whenever
+  // items retrieval is on; the orchestrator could be smarter if budget
+  // pressure becomes a problem.
+  const itemRetrieval = retrieveItems({
     tenantId,
-    query: message.trim(),
-    topK,
+    query: trimmedMessage,
+    queryVector,
+    topK: TOP_K_ITEMS,
+  });
+  const qnaRetrieval = retrieveQnaMatches({
+    tenantId,
+    query: trimmedMessage,
+    queryVector,
+    detectedLanguage,
+    topK: TOP_K_QNA,
   });
 
-  const citationViews: CitationView[] = retrieved.map((c) => ({
-    sourceName: c.sourceName,
-    content: c.content,
-    sourceUrl: extractUrl(c),
-  }));
+  // Run items + qna retrieval in parallel; chunks fires after we know
+  // whether items came back (so we can pick the right top-K). This serial
+  // wait is cheap because both qna and items are fast vector lookups
+  // (HNSW indexed) — typically ~10–30ms.
+  const [retrievedItems, retrievedQna] = await Promise.all([
+    itemRetrieval,
+    qnaRetrieval,
+  ]);
+
+  const chunkTopK = retrievedItems.length > 0 ? TOP_K_CHUNKS_WITH_ITEMS : TOP_K_CHUNKS_NO_ITEMS;
+  const retrievedChunks: RetrievedChunk[] = await retrieveChunks({
+    tenantId,
+    query: trimmedMessage,
+    queryVector,
+    topK: chunkTopK,
+  });
+
+  // Tier-2 operational facts: keyword-gated relevance. Only the matched
+  // fields land in Block C — keeps the section bounded.
+  const tier2Flags = detectTier2Relevance(trimmedMessage);
+  const relevantTier2 = pickRelevantTier2(factsData, tier2Flags);
+
+  // Build the unified citation list. ORDER MATTERS: items first (so
+  // Block A's "prefer structured items" rule reads naturally on the
+  // numbered citations), then chunks, then qna, then operational facts.
+  // The `index` field on each citation is its 1-based position in this
+  // list — the same number Claude sees as `[N]` in Block C.
+  const renderedCitations: RenderedCitation[] = [];
+  const brainCitations: BrainCitation[] = [];
+
+  for (const it of retrievedItems) {
+    const idx = renderedCitations.length + 1;
+    renderedCitations.push({
+      kind: "item",
+      name: it.name,
+      brand: it.brand,
+      sku: it.sku,
+      currency: it.currency,
+      priceCents: it.priceCents,
+      availability: it.availability,
+      specs: it.specs,
+    });
+    brainCitations.push({
+      index: idx,
+      kind: "item",
+      itemId: it.itemId,
+      name: it.name,
+      brand: it.brand,
+      sku: it.sku,
+      preview: it.description?.slice(0, 240) ?? it.name,
+      vectorScore: it.vectorScore,
+      lexicalScore: it.lexicalScore,
+    });
+  }
+
+  for (const ch of retrievedChunks) {
+    const idx = renderedCitations.length + 1;
+    const sourceUrl = extractUrl(ch);
+    renderedCitations.push({
+      kind: "chunk",
+      sourceName: ch.sourceName,
+      sourceUrl,
+      content: ch.content,
+    });
+    brainCitations.push({
+      index: idx,
+      kind: "chunk",
+      chunkId: ch.chunkId,
+      sourceId: ch.sourceId,
+      sourceName: ch.sourceName,
+      sourceUrl,
+      preview: ch.content.slice(0, 240),
+      vectorScore: ch.vectorScore,
+      lexicalScore: ch.lexicalScore,
+    });
+  }
+
+  for (const qa of retrievedQna) {
+    const idx = renderedCitations.length + 1;
+    renderedCitations.push({
+      kind: "qna",
+      question: qa.question,
+      answer: qa.answer,
+    });
+    brainCitations.push({
+      index: idx,
+      kind: "qna",
+      qnaId: qa.qnaId,
+      question: qa.question,
+      preview: qa.answer.slice(0, 240),
+      score: qa.score,
+    });
+  }
+
+  for (const [field, value] of Object.entries(relevantTier2) as Array<
+    [OperationalFactField, OperationalFactsTier2[OperationalFactField]]
+  >) {
+    if (value === undefined) continue;
+    const idx = renderedCitations.length + 1;
+    renderedCitations.push({
+      kind: "operational_fact",
+      field,
+      value,
+    });
+    brainCitations.push({
+      index: idx,
+      kind: "operational_fact",
+      field,
+      preview: factPreview(field, value),
+    });
+  }
 
   const { system, userMessage } = buildPrompt({
     tenantName: tenant.name,
     voice,
     operationalFactsTier1,
-    citations: citationViews,
+    citations: renderedCitations,
     history,
-    message,
+    message: trimmedMessage,
   });
 
-  // Cheap input-budget guard. cl100k chars-per-token ≈ 4 on natural prose
-  // → 24k chars ≈ 6k tokens. If we ever exceed the budget, throw fast
-  // rather than burn API credit on a doomed call.
-  const totalChars =
-    system.reduce((n, b) => n + b.text.length, 0) + userMessage.length;
-  if (totalChars > MAX_INPUT_TOKEN_HEADROOM * 4) {
+  // Token-budget guard with the actual cl100k tokenizer (was a 4-chars
+  // /token heuristic in Phase 4). Tighter signal at the cost of one
+  // synchronous tokenization per call — acceptable; cl100k_base is
+  // an array lookup, not a network round-trip.
+  const inputTokens =
+    system.reduce((n, b) => n + countTokens(b.text), 0) + countTokens(userMessage);
+  if (inputTokens > MAX_INPUT_TOKEN_HEADROOM) {
     throw new Error(
-      `prompt exceeds input-token budget (~${Math.round(totalChars / 4)} tokens)`,
+      `prompt exceeds input-token budget (${inputTokens} > ${MAX_INPUT_TOKEN_HEADROOM})`,
+    );
+  }
+
+  // Dev-mode instrumentation — log per-section token counts so we can
+  // see real distributions vs the per-section caps without instrumenting
+  // the production hot path. Compact one-liner per call.
+  if (process.env.NODE_ENV !== "production") {
+    const blockA = countTokens(system[0]?.text ?? "");
+    const blockB = countTokens(system[1]?.text ?? "");
+    const userTokens = countTokens(userMessage);
+    const sectionTokens = sectionTokenCounts(renderedCitations);
+    console.log(
+      `[brain-budget] tenant=${tenantId} A=${blockA} B=${blockB} C=${userTokens} ` +
+        `(items=${sectionTokens.items} chunks=${sectionTokens.chunks} qna=${sectionTokens.qna} facts=${sectionTokens.facts}) ` +
+        `total=${inputTokens}/${MAX_INPUT_TOKEN_HEADROOM}`,
     );
   }
 
@@ -173,9 +376,14 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
   });
   const tool: SendReplyToolArgs = claudeResult.toolArgs;
 
-  // Top vector similarity is a 0..1 retrieval-truth signal; fall back to 0
-  // when there were no vector hits (lex-only / empty corpus).
-  const topChunkSimilarity = retrieved[0]?.vectorScore ?? 0;
+  // Top retrieval-truth signal: prefer the strongest chunk vector score,
+  // but if items beat chunks on similarity, surface that instead. The
+  // confidence formula treats this as "how grounded was retrieval" —
+  // either kind counts.
+  const topChunkScore = retrievedChunks[0]?.vectorScore ?? 0;
+  const topItemScore = retrievedItems[0]?.vectorScore ?? 0;
+  const topQnaScore = retrievedQna[0]?.score ?? 0;
+  const topChunkSimilarity = Math.max(topChunkScore, topItemScore, topQnaScore);
 
   const confidence = computeConfidence({
     groundedness: tool.groundedness,
@@ -190,21 +398,10 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
     claudeReason: tool.escalation_reason ?? null,
   });
 
-  const citations: BrainCitation[] = retrieved.map((c, i) => ({
-    index: i + 1,
-    chunkId: c.chunkId,
-    sourceId: c.sourceId,
-    sourceName: c.sourceName,
-    sourceUrl: extractUrl(c),
-    preview: c.content.slice(0, 240),
-    vectorScore: c.vectorScore,
-    lexicalScore: c.lexicalScore,
-  }));
-
   return {
     reply: tool.reply,
     language: tool.language,
-    citations,
+    citations: brainCitations,
     citationsUsed: tool.citations_used,
     groundedness: tool.groundedness,
     confidence,
@@ -217,6 +414,68 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
       usage: claudeResult.usage,
     },
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Per-section token totals for dev-mode logging. Re-tokenizes just the
+ * citation segments — cheap (cl100k is an array lookup) and avoids
+ * threading per-section token counts through the prompt builders.
+ */
+function sectionTokenCounts(citations: RenderedCitation[]): {
+  items: number;
+  chunks: number;
+  qna: number;
+  facts: number;
+} {
+  const totals = { items: 0, chunks: 0, qna: 0, facts: 0 };
+  for (const c of citations) {
+    // Cheap proxy: tokenize the JSON shape — close enough for distribution
+    // logging. Production telemetry can refine if needed.
+    const tokens = countTokens(JSON.stringify(c));
+    if (c.kind === "item") totals.items += tokens;
+    else if (c.kind === "chunk") totals.chunks += tokens;
+    else if (c.kind === "qna") totals.qna += tokens;
+    else if (c.kind === "operational_fact") totals.facts += tokens;
+  }
+  return totals;
+}
+
+/**
+ * Short preview string for an operational-fact citation — surfaced in
+ * BrainResult.citations[].preview so the dashboard can show "Hours: Mon-Fri
+ * 9-17" without the renderer-level rendering. Per-field summary, capped.
+ */
+function factPreview(
+  field: OperationalFactField,
+  value: OperationalFactsTier2[OperationalFactField],
+): string {
+  if (value === undefined) return "";
+  switch (field) {
+    case "hours": {
+      const h = value as OperationalFactsTier2["hours"];
+      if (!h) return "";
+      const days = h.weekly.length;
+      return `${days} day${days === 1 ? "" : "s"} configured (${h.tz})`;
+    }
+    case "locations": {
+      const arr = value as OperationalFactsTier2["locations"];
+      if (!arr || arr.length === 0) return "(none)";
+      return arr.map((l) => l.label).slice(0, 3).join(", ");
+    }
+    case "exceptions": {
+      const arr = value as OperationalFactsTier2["exceptions"];
+      if (!arr || arr.length === 0) return "(none)";
+      return `${arr.length} exception${arr.length === 1 ? "" : "s"}`;
+    }
+    case "currency":
+      return String(value);
+    case "serviceArea":
+      return String(value).slice(0, 100);
+  }
 }
 
 function extractUrl(c: RetrievedChunk): string | undefined {

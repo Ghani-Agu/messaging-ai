@@ -13,7 +13,16 @@ vi.mock("../db/client", () => ({
 }));
 
 vi.mock("../knowledge/retriever", () => ({
-  retrieve: vi.fn(),
+  retrieveChunks: vi.fn(),
+  retrieveItems: vi.fn(),
+  retrieveQnaMatches: vi.fn(),
+}));
+
+vi.mock("@/server/ai/embeddings", () => ({
+  embed: vi.fn(async () => ({
+    vectors: [[0.1, 0.2, 0.3]],
+    provider: "voyage" as const,
+  })),
 }));
 
 vi.mock("../db/operational-facts", async () => {
@@ -21,15 +30,19 @@ vi.mock("../db/operational-facts", async () => {
     "../db/operational-facts",
   );
   return {
-    // Re-export pickTier1 / parseOperationalFactsData / TIER1_KEYS as-is
-    // so the orchestrator's pickTier1 call works against real logic.
+    // Re-export the real schemas / picker / detector so the orchestrator
+    // uses real logic for tier-1 / tier-2 decisions.
     ...actual,
     getOperationalFacts: vi.fn(),
   };
 });
 
 import { prisma } from "../db/client";
-import { retrieve } from "../knowledge/retriever";
+import {
+  retrieveChunks,
+  retrieveItems,
+  retrieveQnaMatches,
+} from "../knowledge/retriever";
 import { getOperationalFacts } from "../db/operational-facts";
 import { runBrain } from "./orchestrator";
 import {
@@ -71,7 +84,16 @@ const sampleChunk = (i: number) => ({
 beforeEach(() => {
   __resetClaudeClientForTests();
   vi.mocked(prisma.tenant.findUnique).mockResolvedValue(mockedTenant as never);
-  vi.mocked(retrieve).mockResolvedValue([sampleChunk(0), sampleChunk(1), sampleChunk(2)]);
+  // P8c: orchestrator runs three retrieval channels in parallel. Default
+  // each to a sensible non-empty / empty mix; tests that need different
+  // shapes override per-call below.
+  vi.mocked(retrieveChunks).mockResolvedValue([
+    sampleChunk(0),
+    sampleChunk(1),
+    sampleChunk(2),
+  ]);
+  vi.mocked(retrieveItems).mockResolvedValue([]);
+  vi.mocked(retrieveQnaMatches).mockResolvedValue([]);
   // Default: no operational facts (pre-Phase-8 tenant). Specific tests
   // override per-call to inject tier-1 / tier-2 envelopes.
   vi.mocked(getOperationalFacts).mockResolvedValue({});
@@ -92,8 +114,13 @@ describe("runBrain — happy path with stub client", () => {
     expect(r.language).toBe("en");
     expect(r.citations).toHaveLength(3);
     expect(r.citations[0]!.index).toBe(1);
-    expect(r.citations[0]!.sourceName).toBe("docs.example.com");
-    expect(r.citations[0]!.sourceUrl).toBe("https://docs.example.com/page");
+    expect(r.citations[0]!.kind).toBe("chunk");
+    // Narrow on kind for kind-specific fields. Default mock returns chunks
+    // only, so [0] is a chunk citation.
+    const c0 = r.citations[0]!;
+    if (c0.kind !== "chunk") throw new Error("expected chunk citation");
+    expect(c0.sourceName).toBe("docs.example.com");
+    expect(c0.sourceUrl).toBe("https://docs.example.com/page");
     // Stub uses citations 1+2 on the happy path.
     expect(r.citationsUsed).toEqual([1, 2]);
   });
@@ -141,7 +168,7 @@ describe("runBrain — escalation paths", () => {
   });
 
   it("no citations → OUTSIDE_SCOPE, escalation surfaces, low confidence", async () => {
-    vi.mocked(retrieve).mockResolvedValueOnce([]);
+    vi.mocked(retrieveChunks).mockResolvedValueOnce([]);
     const r = await runBrain({
       tenantId: "tenant-1",
       message: "Bonjour, comment allez-vous?",

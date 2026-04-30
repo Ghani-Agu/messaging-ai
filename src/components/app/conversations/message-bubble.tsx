@@ -302,14 +302,14 @@ function CitationStrip({
               )}
             >
               <span className="font-mono">[{c.index}]</span>
-              <span className="max-w-[18ch] truncate">{c.sourceName}</span>
+              <span className="max-w-[18ch] truncate">{citationLabel(c)}</span>
             </button>
           );
         })}
       </div>
       {open ? (
         <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 text-body-sm text-[var(--text-secondary)]">
-          {open.sourceUrl ? (
+          {open.kind === "chunk" && open.sourceUrl ? (
             <a
               href={open.sourceUrl}
               target="_blank"
@@ -323,17 +323,40 @@ function CitationStrip({
             {open.preview}
           </p>
           <div className="mt-2 flex gap-3 text-caption text-[var(--text-tertiary)]">
-            {typeof open.vectorScore === "number" ? (
+            {(open.kind === "chunk" || open.kind === "item") &&
+            typeof open.vectorScore === "number" ? (
               <span>vector {open.vectorScore.toFixed(2)}</span>
             ) : null}
-            {typeof open.lexicalScore === "number" ? (
+            {(open.kind === "chunk" || open.kind === "item") &&
+            typeof open.lexicalScore === "number" ? (
               <span>lexical {open.lexicalScore.toFixed(2)}</span>
+            ) : null}
+            {open.kind === "qna" ? (
+              <span>match {open.score.toFixed(2)}</span>
             ) : null}
           </div>
         </div>
       ) : null}
     </div>
   );
+}
+
+/**
+ * Per-kind display label for the citation chip. P8c-5 layers proper kind
+ * badges on top; P8c-2 just gets the text right so the discriminated union
+ * compiles + renders without crashes.
+ */
+function citationLabel(c: Citation): string {
+  switch (c.kind) {
+    case "chunk":
+      return c.sourceName;
+    case "item":
+      return c.brand ? `${c.name} (${c.brand})` : c.name;
+    case "qna":
+      return `Q&A: ${c.question.slice(0, 40)}${c.question.length > 40 ? "…" : ""}`;
+    case "operational_fact":
+      return `Fact: ${c.field}`;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

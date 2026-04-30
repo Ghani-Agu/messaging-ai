@@ -1,7 +1,14 @@
 import "server-only";
+import type { ItemAvailability, Prisma } from "@prisma/client";
+import { Tiktoken } from "js-tiktoken/lite";
+import cl100kBase from "js-tiktoken/ranks/cl100k_base";
 import type { VoiceProfile } from "@/lib/validators";
-import type { RetrievedChunk } from "@/server/knowledge/retriever";
-import type { OperationalFactsTier1 } from "@/server/db/operational-facts";
+import type {
+  OperationalFactsHours,
+  OperationalFactsLocation,
+  OperationalFactsTier1,
+  OperationalFactsTier2,
+} from "@/lib/operational-facts";
 
 /**
  * AI brain prompt builders. The system prompt is assembled as a multi-block
@@ -33,6 +40,12 @@ GROUNDING (highest priority)
 - Use ONLY the CITATIONS below. No outside knowledge for facts about products, prices, policies, hours, locations, or anything specific to the business.
 - If the citations don't contain the answer: say so honestly, in the customer's language, and offer to connect a human. Do not guess.
 - Track every citation index you used in citations_used.
+
+CITATION KINDS
+- Each citation is tagged with one of: STRUCTURED ITEM, CITATION (free text), Q&A, OPERATIONAL FACT.
+- When STRUCTURED ITEMS contain a field directly relevant to the question (price, availability, specs), prefer that field over CITATIONS. CITATIONS are reference text; STRUCTURED ITEMS are the tenant's authoritative product/service data.
+- When a citation is tagged Q&A (USE NEAR-VERBATIM), use its answer text directly. Only adapt for the customer's language and register — do not paraphrase or summarize the answer.
+- OPERATIONAL FACTS (hours, locations, etc.) are authoritative for the field they describe; treat as ground truth.
 
 LANGUAGE
 - Mirror the customer's register and culture-specific phrasing. Do NOT introduce religious, regional, or familial terms (e.g. inshallah, habibi, khouya, mon frère) unless the customer used them first.
@@ -148,8 +161,24 @@ export function buildBlockB(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Block C — runtime user turn. Citations + last-N history + new message.
-// Lives on the user message, not the system blocks, so it isn't cached.
+// Block C — runtime user turn. Unified citations (chunk / item / qna /
+// operational_fact) + last-N history + new message. Lives on the user
+// message, not the system blocks, so it isn't cached.
+//
+// Citation numbering is FLAT [1]..[N] across all four kinds — Claude's
+// `send_reply.citations_used` is `integer[]`, so we can't have parallel
+// per-kind numbering schemes. Each citation header carries an explicit
+// kind tag (STRUCTURED ITEM / CITATION / Q&A / OPERATIONAL FACT) so
+// Claude can apply the per-kind rules from Block A.
+//
+// Per-section budgets (Gate-1 P8c risk discussion):
+//   - chunks:     ≤ 2500 tokens (truncated by content slicing)
+//   - items:      ≤ 1500 tokens (top-5 items, concise rendering)
+//   - qna:        ≤  500 tokens (top-1 above threshold)
+//   - opfacts:    ≤  400 tokens (only relevant fields)
+//   - history:    last 8 turns
+// Total Block A+B+C asserted ≤ 5500 tokens by prompts/system.test.ts so
+// we leave headroom for history/output within the 8000 input budget.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type HistoryTurn = {
@@ -157,18 +186,171 @@ export type HistoryTurn = {
   text: string;
 };
 
-export type CitationView = Pick<
-  RetrievedChunk,
-  "sourceName" | "content"
-> & {
-  /** May be empty for MANUAL sources. */
+export type RenderedChunkCitation = {
+  kind: "chunk";
+  sourceName: string;
   sourceUrl?: string;
+  content: string;
 };
 
-const MAX_CITATION_CHARS = 1200;
+export type RenderedItemCitation = {
+  kind: "item";
+  name: string;
+  brand?: string | null;
+  sku?: string | null;
+  currency?: string | null;
+  priceCents?: number | null;
+  availability: ItemAvailability;
+  /** Free-form spec bag from KnowledgeItem.specs. Reserved `_`-prefix keys excluded by render. */
+  specs?: Prisma.JsonValue;
+};
+
+export type RenderedQnaCitation = {
+  kind: "qna";
+  question: string;
+  answer: string;
+};
+
+export type OperationalFactField =
+  | "hours"
+  | "locations"
+  | "exceptions"
+  | "currency"
+  | "serviceArea";
+
+export type RenderedOperationalFactCitation = {
+  kind: "operational_fact";
+  field: OperationalFactField;
+  /** Slice of OperationalFactsTier2 for the named field; renderer pulls the right shape. */
+  value: OperationalFactsTier2[OperationalFactField];
+};
+
+export type RenderedCitation =
+  | RenderedChunkCitation
+  | RenderedItemCitation
+  | RenderedQnaCitation
+  | RenderedOperationalFactCitation;
+
+const MAX_CHUNK_CONTENT_CHARS = 1200;
+/** How many spec key:value pairs to surface per item, after excluding _-prefix keys. */
+const ITEM_SPEC_FIELDS_RENDER_LIMIT = 2;
+
+/**
+ * Render a numbered citation entry with its kind tag. Each kind has its
+ * own concise format chosen for token economy + explicit-structure-for-the-LLM:
+ *   STRUCTURED ITEM — name + price + availability + 1-2 key specs
+ *   CITATION        — source/url + truncated content
+ *   Q&A             — question + answer (USE NEAR-VERBATIM tag for Block A rule)
+ *   OPERATIONAL FACT — field name + rendered value
+ */
+function renderCitation(c: RenderedCitation, index: number): string {
+  switch (c.kind) {
+    case "item":
+      return renderItemCitation(c, index);
+    case "qna":
+      return renderQnaCitation(c, index);
+    case "operational_fact":
+      return renderOperationalFactCitation(c, index);
+    case "chunk": {
+      const head = c.sourceUrl
+        ? `[${index}] CITATION — ${c.sourceName} — ${c.sourceUrl}`
+        : `[${index}] CITATION — ${c.sourceName}`;
+      const body = c.content.slice(0, MAX_CHUNK_CONTENT_CHARS).trim();
+      return `${head}\n    ${body.replace(/\n/g, "\n    ")}`;
+    }
+  }
+}
+
+function renderItemCitation(c: RenderedItemCitation, index: number): string {
+  const headBits: string[] = [c.name];
+  if (c.brand) headBits.push(`(${c.brand})`);
+  const fieldBits: string[] = [];
+  if (c.sku) fieldBits.push(`SKU: ${c.sku}`);
+  if (c.priceCents !== null && c.priceCents !== undefined) {
+    const major = (c.priceCents / 100).toFixed(2);
+    fieldBits.push(`Price: ${c.currency ?? ""} ${major}`.trim());
+  }
+  fieldBits.push(`Availability: ${c.availability}`);
+  const specsLine = renderItemSpecsLine(c.specs);
+  const lines = [
+    `[${index}] STRUCTURED ITEM — ${headBits.join(" ")}`,
+    `    ${fieldBits.join(" | ")}`,
+  ];
+  if (specsLine) lines.push(`    Specs: ${specsLine}`);
+  return lines.join("\n");
+}
+
+function renderItemSpecsLine(specs: Prisma.JsonValue | undefined): string {
+  if (!specs || typeof specs !== "object" || Array.isArray(specs)) return "";
+  const entries: Array<[string, string]> = [];
+  for (const [k, v] of Object.entries(specs as Record<string, unknown>)) {
+    if (k.startsWith("_")) continue; // reserved (e.g. _template_id)
+    if (v === null || v === undefined) continue;
+    const s = typeof v === "string" ? v : String(v);
+    if (s.trim().length === 0) continue;
+    entries.push([k, s.trim()]);
+    if (entries.length >= ITEM_SPEC_FIELDS_RENDER_LIMIT) break;
+  }
+  return entries.map(([k, v]) => `${k}: ${v}`).join(", ");
+}
+
+function renderQnaCitation(c: RenderedQnaCitation, index: number): string {
+  return [
+    `[${index}] Q&A (USE NEAR-VERBATIM)`,
+    `    Q: ${c.question}`,
+    `    A: ${c.answer.replace(/\n/g, "\n       ")}`,
+  ].join("\n");
+}
+
+function renderOperationalFactCitation(
+  c: RenderedOperationalFactCitation,
+  index: number,
+): string {
+  return [`[${index}] OPERATIONAL FACT — ${c.field}`, `    ${renderFactValue(c.field, c.value)}`].join("\n");
+}
+
+function renderFactValue(field: OperationalFactField, value: OperationalFactsTier2[OperationalFactField]): string {
+  if (value === undefined) return "(unset)";
+  switch (field) {
+    case "hours":
+      return renderHours(value as OperationalFactsHours);
+    case "locations":
+      return renderLocations(value as OperationalFactsLocation[]);
+    case "currency":
+      return String(value);
+    case "serviceArea":
+      return String(value);
+    case "exceptions": {
+      const ex = value as OperationalFactsTier2["exceptions"];
+      if (!ex || ex.length === 0) return "(none)";
+      return ex.map((e) => `${e.date} — ${e.label}${e.closed ? " (closed)" : ""}`).join("; ");
+    }
+  }
+}
+
+function renderHours(h: OperationalFactsHours): string {
+  if (h.weekly.length === 0) return `Hours: by appointment (${h.tz})`;
+  // Group consecutive same-hours days: "Mon-Fri 09:00-17:00, Sat 10:00-14:00".
+  // Simple inline rendering (not collapsing) for v1 — distinct days listed in order.
+  const order: Record<string, number> = { mon: 0, tue: 1, wed: 2, thu: 3, fri: 4, sat: 5, sun: 6 };
+  const sorted = [...h.weekly].sort((a, b) => (order[a.day] ?? 0) - (order[b.day] ?? 0));
+  const parts = sorted.map(
+    (d) => `${d.day.charAt(0).toUpperCase()}${d.day.slice(1)} ${d.open}-${d.close}`,
+  );
+  return `${parts.join(", ")} (${h.tz})`;
+}
+
+function renderLocations(locs: OperationalFactsLocation[]): string {
+  if (locs.length === 0) return "(none)";
+  return locs.map((l) => {
+    const bits = [l.label, l.address];
+    if (l.phone) bits.push(l.phone);
+    return bits.join(" — ");
+  }).join("; ");
+}
 
 export function buildBlockC(args: {
-  citations: CitationView[];
+  citations: RenderedCitation[];
   history: HistoryTurn[];
   message: string;
 }): string {
@@ -180,12 +362,7 @@ export function buildBlockC(args: {
     sections.push("(none — knowledge base did not return any relevant chunks)");
   } else {
     for (let i = 0; i < citations.length; i++) {
-      const c = citations[i]!;
-      const head = c.sourceUrl
-        ? `[${i + 1}] ${c.sourceName} — ${c.sourceUrl}`
-        : `[${i + 1}] ${c.sourceName}`;
-      const body = c.content.slice(0, MAX_CITATION_CHARS).trim();
-      sections.push(`${head}\n    ${body.replace(/\n/g, "\n    ")}`);
+      sections.push(renderCitation(citations[i]!, i + 1));
     }
   }
 
@@ -218,7 +395,7 @@ export function buildPrompt(args: {
   voice: VoiceProfile;
   /** Tier-1 operational facts (Phase 8b). Optional — pre-Phase-8 tenants pass undefined. */
   operationalFactsTier1?: OperationalFactsTier1;
-  citations: CitationView[];
+  citations: RenderedCitation[];
   history: HistoryTurn[];
   message: string;
 }): { system: SystemBlock[]; userMessage: string } {
@@ -237,4 +414,27 @@ export function buildPrompt(args: {
       message: args.message,
     }),
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Token counting (Phase 8c)
+//
+// cl100k_base — the closest publicly available approximation to Claude's
+// tokenizer (within ±5–10% on natural prose). Used for:
+//   - The Phase-4 input-token guard in the orchestrator (was a 4-chars/token
+//     heuristic; tighter when typed-knowledge sections come into play).
+//   - Per-section dev-mode instrumentation (logs chunks/items/qna/facts
+//     token counts so we can see real distributions vs the 1500/2500 caps).
+//   - The budget assertion test (prompts/system.test.ts) that fails fast
+//     if a representative A+B+C envelope exceeds 5500 tokens.
+//
+// Encoder is module-scoped (single allocation per process). Anthropic's
+// real count_tokens endpoint will replace this once the real client lands.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const enc = new Tiktoken(cl100kBase);
+
+export function countTokens(text: string): number {
+  if (!text) return 0;
+  return enc.encode(text).length;
 }
