@@ -1,81 +1,39 @@
 import "server-only";
-import { z } from "zod";
 import { Prisma, type QnaPair } from "@prisma/client";
 import { prisma } from "./client";
-import { SUPPORTED_LANGUAGES } from "@/lib/validators";
 import { enqueueEmbedQna } from "@/server/queue/jobs";
+import {
+  normalizeQuestion,
+  qnaPairInputSchema,
+  type QnaPairInput,
+  type QnaPairSummary,
+} from "@/lib/qna";
 
 /**
- * QnaPair (Phase 8b — Type 3: authoritative Q&A).
+ * QnaPair DB layer (Phase 8b/c — Type 3: authoritative Q&A).
  *
  * Dedupe is enforced at the DB layer via the `(tenantId, normalizedQuestion)`
- * composite UNIQUE. The normalization is computed in this helper — never
- * in callers — so any code path through createQnaPair / updateQnaPair gets
- * consistent normalization. P2002 from the unique constraint is caught and
- * re-thrown as `QnaDuplicateError` carrying the existing pair's id, which
- * the Server Action layer surfaces as a friendly message pointing the
+ * composite UNIQUE. The normalization is computed in the lib helper —
+ * never in callers — so any code path through createQnaPair / updateQnaPair
+ * gets consistent normalization. P2002 from the unique constraint is caught
+ * and re-thrown as `QnaDuplicateError` carrying the existing pair's id,
+ * which the Server Action layer surfaces as a friendly message pointing the
  * operator at the existing entry.
  *
- * The questionEmbedding column is Unsupported in Prisma — same raw-SQL
- * write path as KnowledgeItem.embedding. P8c wires the embed worker; P8b
- * leaves embeddings null. Q&A is editable + listable without embedding;
- * semantic match (P8e) needs the vector populated.
+ * Schemas + types + normalizeQuestion live in src/lib/qna.ts per the
+ * server-only/lib split rule (CLAUDE.md §4) so the Q&A admin form can
+ * import the schema for client-side pre-submit validation.
  */
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Normalization
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Lowercase + trim + collapse internal whitespace runs to single spaces.
- * App-set rather than GENERATED in the DB because lower() is STABLE (not
- * IMMUTABLE) under non-C collations, which would block GENERATED ALWAYS.
- *
- * Pure function — exported for tests.
- */
-export function normalizeQuestion(question: string): string {
-  return question.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Input schema
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const qnaPairInputSchema = z.object({
-  question: z.string().trim().min(1, "Question is required").max(500),
-  answer: z.string().trim().min(1, "Answer is required").max(4000),
-  // Author hint. Brain still detects per-message; only meaningful when
-  // languageLock=true (then the Q&A only matches queries detected to be
-  // in this language).
-  language: z.enum(SUPPORTED_LANGUAGES).optional(),
-  // Per Gate-1 C: default off — most tenants want a French Q&A to fire on
-  // an Arabic query with the brain handling translation.
-  languageLock: z.boolean().default(false),
-  // Free-form tags for filtering in the dashboard. Up to 10 to keep the
-  // UI bounded; lengths capped to avoid Postgres array-text bloat.
-  tags: z.array(z.string().trim().min(1).max(40)).max(10).default([]),
-  // Provenance — operator can paste a URL where the canonical answer was
-  // sourced. Stored verbatim; never auto-fetched.
-  sourceUrl: z.string().trim().url().max(2048).optional(),
-});
-export type QnaPairInput = z.infer<typeof qnaPairInputSchema>;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Read shapes
-// ─────────────────────────────────────────────────────────────────────────────
-
-export type QnaPairSummary = {
-  id: string;
-  question: string;
-  answer: string;
-  language: string | null;
-  languageLock: boolean;
-  tags: string[];
-  hasEmbedding: boolean;
-  lastVerifiedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
+// Re-exports — keeps existing import sites working without churn.
+export {
+  normalizeQuestion,
+  qnaPairInputSchema,
+} from "@/lib/qna";
+export type {
+  QnaPairInput,
+  QnaPairSummary,
+} from "@/lib/qna";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Errors

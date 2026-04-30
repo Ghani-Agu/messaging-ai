@@ -67,6 +67,11 @@ Workflow per phase:
 
 - **TypeScript:** strict + `noUncheckedIndexedAccess`. `import type` for type-only imports (auto-fixed by `consistent-type-imports`).
 - **Server vs. client:** server-only files under `src/server/**` are never imported by `"use client"` components. App code reaches the database through `src/server/db/`, LLMs through `src/server/ai/`.
+- **`src/lib/` vs `src/server/db/` split (Phase 8 standing rule):** anything a client component reaches must NOT live in a `"server-only"` module. Next.js's bundler trips the server-only guard on `import type` paths too — type erasure happens after the import graph is resolved, so a client component reading a `import type { Foo } from "@/server/db/x"` still triggers the runtime error. We've hit this three times (Phase 8b OperationalFacts, Phase 8c Items, would have hit it again with Q&A). The standing fix:
+  - `src/lib/<feature>.ts` — Zod schemas, types, pure helpers (no Prisma, no `"server-only"`). Imported by both client components and server code.
+  - `src/server/db/<feature>.ts` — Prisma calls, raw SQL, side-effecting helpers. Marked `"server-only"`. Re-exports the schemas/types from `src/lib/` for source-compat with existing server-side callers (orchestrator, workers, Server Actions).
+  - When you create a new typed-knowledge or operator-facing entity, default to the lib/server split from the start. Don't wait for the bundler to catch it.
+  - References: `src/lib/operational-facts.ts` ↔ `src/server/db/operational-facts.ts`, `src/lib/items.ts` ↔ `src/server/db/items.ts`.
 - **Styling:** Tailwind v4 CSS-first. Tokens defined in `src/app/globals.css` via `@theme inline`. There is no `tailwind.config.ts` (this is a Phase 1 deviation from MASTER_PLAN §5; the deviation is recorded there).
 - **Class strings:** must be statically detectable by Tailwind's content scanner. No `` `text-${variant}` ``. Use literal class maps for variants.
 - **Components:** `forwardRef` + `displayName`. CVA for variants. shadcn/ui patterns, but always restyled to the design tokens — no out-of-the-box shadcn look anywhere.
