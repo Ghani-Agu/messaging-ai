@@ -171,6 +171,21 @@ export async function deleteQnaPair(args: {
   });
 }
 
+/**
+ * Bulk delete a set of Q&A pairs by id, scoped to a tenant. Used by the
+ * Q&A admin's "delete selected" action. Returns the affected row count.
+ */
+export async function bulkDeleteQnaPairs(args: {
+  tenantId: string;
+  qnaIds: string[];
+}): Promise<{ count: number }> {
+  if (args.qnaIds.length === 0) return { count: 0 };
+  const result = await prisma.qnaPair.deleteMany({
+    where: { tenantId: args.tenantId, id: { in: args.qnaIds } },
+  });
+  return { count: result.count };
+}
+
 export async function getQnaPair(args: {
   tenantId: string;
   qnaId: string;
