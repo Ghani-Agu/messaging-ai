@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   BookOpen,
+  Building2,
   CreditCard,
   LayoutDashboard,
   MessageSquare,
@@ -22,10 +23,16 @@ type NavItem = {
   phase?: number;
 };
 
+// Order: most-used → least-used. Phase 8 added "Business Info" (Operational
+// Facts) as a top-level entry per Gate-1 K8 override (flat sidebar — these
+// are daily operator actions and deserve top-level visibility, not nesting
+// under "Knowledge"). Placed alongside Knowledge so the two
+// knowledge-shaped surfaces sit together.
 const ITEMS: NavItem[] = [
   { href: (s) => `/${s}/dashboard`, label: "Dashboard", icon: LayoutDashboard },
   { href: (s) => `/${s}/conversations`, label: "Conversations", icon: MessageSquare, phase: 5 },
   { href: (s) => `/${s}/knowledge`, label: "Knowledge", icon: BookOpen, phase: 3 },
+  { href: (s) => `/${s}/knowledge/business-info`, label: "Business Info", icon: Building2, phase: 8 },
   { href: (s) => `/${s}/channels`, label: "Channels", icon: Plug, phase: 5 },
   { href: (s) => `/${s}/playground`, label: "Playground", icon: Sparkles, phase: 4 },
   { href: (s) => `/${s}/settings`, label: "Settings", icon: Settings },
@@ -34,11 +41,26 @@ const ITEMS: NavItem[] = [
 
 export function SidebarNav({ tenantSlug }: { tenantSlug: string }) {
   const pathname = usePathname();
+  // Pre-compute resolved hrefs so the active-state pass can compare across
+  // items. Without this, an item whose href is a prefix of another's (e.g.
+  // /knowledge vs /knowledge/business-info) would both match on
+  // /knowledge/business-info.
+  const resolved = ITEMS.map((item) => ({ item, href: item.href(tenantSlug) }));
+
   return (
     <nav className="flex-1 space-y-0.5 px-3 py-2">
-      {ITEMS.map((item) => {
-        const href = item.href(tenantSlug);
-        const active = pathname === href || pathname.startsWith(`${href}/`);
+      {resolved.map(({ item, href }) => {
+        const matchesPrefix = pathname === href || pathname.startsWith(`${href}/`);
+        // Another item is "more specific" if its href is a strict child of
+        // this one's AND that item also matches the current pathname.
+        // When that's true, suppress the parent's active state so only the
+        // longest-matching item highlights.
+        const moreSpecificWins = resolved.some(({ href: other }) => {
+          if (other === href) return false;
+          if (!other.startsWith(`${href}/`)) return false;
+          return pathname === other || pathname.startsWith(`${other}/`);
+        });
+        const active = matchesPrefix && !moreSpecificWins;
         const Icon = item.icon;
         return (
           <Link
