@@ -6,6 +6,7 @@ import {
   BookOpen,
   Building2,
   CreditCard,
+  Database,
   LayoutDashboard,
   MessageSquare,
   MessageSquareText,
@@ -33,10 +34,18 @@ type NavItem = {
 const ITEMS: NavItem[] = [
   { href: (s) => `/${s}/dashboard`, label: "Dashboard", icon: LayoutDashboard },
   { href: (s) => `/${s}/conversations`, label: "Conversations", icon: MessageSquare, phase: 5 },
-  { href: (s) => `/${s}/knowledge`, label: "Knowledge", icon: BookOpen, phase: 3 },
+  // Phase 8f: "Knowledge" relabeled to "Documents" so the flat-sidebar
+  // taxonomy is consistent (Documents / Products / Q&A / Business Info /
+  // Live Data Sources are the five top-level knowledge entries — Type 1
+  // through Type 5 of MASTER_PLAN's typology). The route still points at
+  // /knowledge to avoid breaking external links and the active-state
+  // longest-prefix logic; only the sidebar label changed.
+  { href: (s) => `/${s}/knowledge`, label: "Documents", icon: BookOpen, phase: 3 },
   { href: (s) => `/${s}/knowledge/items`, label: "Products", icon: Package, phase: 8 },
   { href: (s) => `/${s}/knowledge/qna`, label: "Q&A", icon: MessageSquareText, phase: 8 },
   { href: (s) => `/${s}/knowledge/business-info`, label: "Business Info", icon: Building2, phase: 8 },
+  // Type 4 — placeholder until the action framework lands.
+  { href: (s) => `/${s}/knowledge/live-data`, label: "Live Data Sources", icon: Database, phase: 8 },
   { href: (s) => `/${s}/channels`, label: "Channels", icon: Plug, phase: 5 },
   { href: (s) => `/${s}/playground`, label: "Playground", icon: Sparkles, phase: 4 },
   { href: (s) => `/${s}/settings`, label: "Settings", icon: Settings },
