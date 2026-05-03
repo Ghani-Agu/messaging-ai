@@ -34,6 +34,8 @@ const REQUIRED_BY_PHASE: Record<string, string[]> = {
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
   ],
+  // ANTHROPIC_MODEL is OPTIONAL — anthropic-config.ts falls back to the
+  // pinned default. The check-env list only enforces required keys.
   "Phase 4 (AI brain)": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
   "Phase 6 (WhatsApp)": ["WHATSAPP_360DIALOG_API_KEY"],
   "Phase 7 (Instagram)": ["META_APP_ID", "META_APP_SECRET", "META_VERIFY_TOKEN"],

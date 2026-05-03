@@ -5,23 +5,19 @@ import { detectLanguage } from "@/lib/language-detect";
 /**
  * The boundary between the orchestrator and "an actual Claude call". The
  * orchestrator depends only on this interface; the stub (this file's
- * StubClaudeClient) and the future real wrapper (src/server/ai/claude.ts,
- * deferred until Anthropic credits arrive) both conform to it.
+ * StubClaudeClient) and the real wrapper (src/server/ai/real-claude-client.ts,
+ * lands in P4r-2) both conform to it.
  *
- * RESUMPTION CHECKLIST (when credits land):
- *   1. Create src/server/ai/claude.ts exporting `class RealClaudeClient
- *      implements ClaudeClient`. Use native fetch + AbortSignal.timeout
- *      per CLAUDE.md §6 (no SDKs in worker paths). Implement sendReply
- *      first; defer streamReply until the playground UI is ready.
- *   2. Pin the dated Sonnet 4.6 snapshot — first run
- *      scripts/list-anthropic-models.ts and have the project lead pick.
- *      Default const overridable by env: ANTHROPIC_MODEL.
- *   3. Wire env: ANTHROPIC_API_KEY (already declared in §11).
- *   4. Swap getClaudeClient() below to return the real implementation
- *      whenever the env key is present, falling back to stub otherwise
- *      (so tests + dev-without-credits keep working).
- *   5. Run scripts/brain-eval.ts to validate the 8-row query bank.
- *   6. Then: build streaming route, playground UI, sidebar voice presets.
+ * Phase 4 resumption status (P4r-1 — Foundation):
+ *   - Pricing table:       src/server/ai/pricing.ts
+ *   - Anthropic config:    src/server/ai/anthropic-config.ts
+ *   - Typed errors:        src/server/ai/errors.ts
+ *   - Test isolation:      VITEST guard + __setClaudeClientForTests below
+ *   - Real client wiring:  P4r-2
+ *   - Prompt caching:      P4r-3
+ *   - streamReply:         P4r-4
+ *   - structureItemsFromText against real Claude: P4r-5
+ *   - brain-eval harness:  P4r-6
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -488,26 +484,63 @@ function stubReplyHuman(lang: SupportedReplyLanguage): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Factory — single seam for swapping stub → real later
+// Factory — single seam for swapping stub → real
 // ─────────────────────────────────────────────────────────────────────────────
 
 let cached: ClaudeClient | null = null;
 
 /**
- * Returns the active Claude client. Currently always the stub (Phase 4
- * partial). When the real wrapper lands, this becomes:
+ * Returns the active Claude client. Resolution order (Gate-1 K9):
  *
- *   if (process.env.ANTHROPIC_API_KEY) return new RealClaudeClient(...);
- *   return new StubClaudeClient();
+ *   1. If a test has injected a client via __setClaudeClientForTests →
+ *      use that. Required for tests that need to assert specific client
+ *      behavior (e.g. spy on sendReply args).
+ *   2. If running under vitest (process.env.VITEST === "true") → stub,
+ *      regardless of ANTHROPIC_API_KEY. Hard guard so the test suite
+ *      cannot accidentally hit the real API and burn credits.
+ *   3. If process.env.ANTHROPIC_API_KEY is set → real client (P4r-2+).
+ *   4. Otherwise → stub. Lets dev work locally without credits.
  *
- * — preserving the dev-without-credits and unit-test paths.
+ * Future CI must NOT include ANTHROPIC_API_KEY in the test job's secrets
+ * (CLAUDE.md §7a documents this); the VITEST guard is belt + suspenders.
+ *
+ * The real client is constructed lazily via dynamic import so importing
+ * this module in test/dev does not pull `@anthropic-ai/sdk` into the
+ * bundle when it isn't needed. P4r-2 wires the dynamic import; P4r-1
+ * leaves the branch returning the stub with a clear marker.
  */
 export function getClaudeClient(): ClaudeClient {
-  if (!cached) cached = new StubClaudeClient();
+  if (cached) return cached;
+
+  // Step 2: hard test guard. vitest sets VITEST=true automatically.
+  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+    cached = new StubClaudeClient();
+    return cached;
+  }
+
+  // Step 3: real client when credentials available. Wired in P4r-2 — for
+  // P4r-1 we still return stub so the existing pipeline keeps working.
+  if (process.env.ANTHROPIC_API_KEY) {
+    // TODO(P4r-2): return new RealClaudeClient({ apiKey, modelId }).
+    cached = new StubClaudeClient();
+    return cached;
+  }
+
+  // Step 4: stub fallback for dev-without-credits.
+  cached = new StubClaudeClient();
   return cached;
 }
 
 /** Test affordance: reset the cached client. Do not call from app code. */
 export function __resetClaudeClientForTests(): void {
   cached = null;
+}
+
+/**
+ * Test affordance: inject a specific client implementation (typically a
+ * mock or a hand-rolled stub). Resets on the next __resetClaudeClientForTests
+ * call. Not exported through any non-test surface.
+ */
+export function __setClaudeClientForTests(client: ClaudeClient): void {
+  cached = client;
 }
