@@ -139,6 +139,13 @@ export async function POST(req: Request): Promise<Response> {
   const inboundId = inbound.id;
   const userMessage = body.message;
 
+  // P4r-4: ReadableStream cancel → abort the upstream Anthropic call.
+  // When the customer closes the connection mid-stream, this controller
+  // fires; runBrainStream → client.streamReply → SDK abort signal closes
+  // the upstream socket. Without this, the brain keeps running (and
+  // billing) for replies the customer will never see.
+  const abortController = new AbortController();
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const encoder = new TextEncoder();
@@ -160,6 +167,7 @@ export async function POST(req: Request): Promise<Response> {
           conversationId,
           message: userMessage,
           history,
+          signal: abortController.signal,
         })) {
           if (event.type === "delta") {
             send({ type: "delta", text: event.text });
@@ -258,6 +266,11 @@ export async function POST(req: Request): Promise<Response> {
       } finally {
         controller.close();
       }
+    },
+    cancel() {
+      // Customer closed the connection mid-stream. Abort the upstream
+      // Anthropic call so we stop billing for tokens nobody will see.
+      abortController.abort();
     },
   });
 

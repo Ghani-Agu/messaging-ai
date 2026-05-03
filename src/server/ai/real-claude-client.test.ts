@@ -26,7 +26,11 @@ import {
 // Module-level mock state, shared between every test in this file.
 // `mockCreate` is the SDK's `messages.create` — tests call
 // .mockResolvedValueOnce / .mockRejectedValueOnce to script behavior.
+// `mockStream` is the SDK's `messages.stream` — returns a fake
+// MessageStream whose `finalMessage()` resolves to whatever the test
+// scripts.
 const mockCreate = vi.fn();
+const mockStream = vi.fn();
 
 vi.mock("@anthropic-ai/sdk", () => {
   /**
@@ -50,7 +54,7 @@ vi.mock("@anthropic-ai/sdk", () => {
     }
   }
   class MockAnthropic {
-    messages = { create: mockCreate };
+    messages = { create: mockCreate, stream: mockStream };
     constructor(_opts: unknown) {}
   }
   return { default: MockAnthropic, APIError: MockAPIError };
@@ -73,9 +77,9 @@ const SAMPLE_SEND_REPLY_ARGS = {
 };
 
 /**
- * P4r-3 schema split: response contains a natural-content text block
- * for the reply AND a separate tool_use block named send_reply_metadata
- * for the structured metadata.
+ * P4r-2/P4r-4 single-tool design: the response contains a tool_use
+ * block (the only block — Sonnet 4.6 forced tool_use is exclusive),
+ * with the reply text inside the tool args.
  */
 function makeFullResponse(overrides?: {
   reply?: string;
@@ -104,14 +108,11 @@ function makeFullResponse(overrides?: {
     stop_sequence: null,
     content: [
       {
-        type: "text" as const,
-        text: overrides?.reply ?? "Hello from the test.",
-      },
-      {
         type: "tool_use" as const,
         id: "toolu_x",
-        name: "send_reply_metadata",
+        name: "send_reply",
         input: {
+          reply: overrides?.reply ?? "Hello from the test.",
           language: overrides?.language ?? "en",
           groundedness: overrides?.groundedness ?? 0.85,
           citations_used: overrides?.citationsUsed ?? [1],
@@ -132,7 +133,7 @@ function makeFullResponse(overrides?: {
 }
 
 function makeRefusalResponse() {
-  // end_turn with NEITHER text content NOR tool_use — full refusal.
+  // end_turn with neither text content nor tool_use — full refusal.
   return {
     id: "msg_x",
     type: "message",
@@ -146,8 +147,9 @@ function makeRefusalResponse() {
 }
 
 /**
- * P4r-3: reply text present but the metadata tool didn't fire — partial
- * response → AnthropicMissingMetadataError.
+ * Defensive: text content present but tool_use didn't fire. Rare in the
+ * single-tool design (Sonnet 4.6 with forced tool_use shouldn't emit
+ * text alongside), but the error path stays for unusual model behavior.
  */
 function makeTextOnlyResponse(reply: string) {
   return {
@@ -164,14 +166,40 @@ function makeTextOnlyResponse(reply: string) {
 
 beforeEach(() => {
   mockCreate.mockReset();
+  mockStream.mockReset();
 });
+
+/**
+ * Mock factory for the SDK's MessageStream return value. We only call
+ * `.finalMessage()` on it in production code, so the mock just needs
+ * that method. Async-iterable stub is here for completeness — never
+ * exercised by RealClaudeClient.
+ */
+function fakeMessageStream(finalOrThrow: unknown) {
+  if (finalOrThrow instanceof Error) {
+    return {
+      async *[Symbol.asyncIterator]() {
+        // no events
+      },
+      finalMessage: async () => {
+        throw finalOrThrow;
+      },
+    };
+  }
+  return {
+    async *[Symbol.asyncIterator]() {
+      // No-op iterator — RealClaudeClient awaits finalMessage() instead.
+    },
+    finalMessage: async () => finalOrThrow,
+  };
+}
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("RealClaudeClient.sendReply — happy path", () => {
-  it("returns a SendReplyResult mapped from text content + tool_use block", async () => {
+  it("returns a SendReplyResult mapped from the tool_use block", async () => {
     mockCreate.mockResolvedValueOnce(
       makeFullResponse({
         reply: "We ship across Algeria in 2-3 days.",
@@ -186,14 +214,12 @@ describe("RealClaudeClient.sendReply — happy path", () => {
     const r = await c.sendReply(SAMPLE_SEND_REPLY_ARGS);
 
     expect(r.modelId).toBe("claude-sonnet-4-6");
-    // Reply text is now top-level on SendReplyResult, not in toolArgs.
-    expect(r.reply).toBe("We ship across Algeria in 2-3 days.");
+    // Single-tool design: reply lives in toolArgs.
+    expect(r.toolArgs.reply).toBe("We ship across Algeria in 2-3 days.");
     expect(r.toolArgs.language).toBe("en");
     expect(r.toolArgs.groundedness).toBe(0.9);
     expect(r.toolArgs.citations_used).toEqual([1, 2]);
     expect(r.toolArgs.escalation_recommended).toBe(false);
-    // toolArgs no longer has a `reply` field.
-    expect((r.toolArgs as { reply?: unknown }).reply).toBeUndefined();
     expect(r.usage).toEqual({
       inputTokens: 1200,
       outputTokens: 80,
@@ -216,23 +242,20 @@ describe("RealClaudeClient.sendReply — happy path", () => {
     expect(r.usage?.cacheReadInputTokens).toBe(0);
   });
 
-  it("forces tool_use with the send_reply_metadata tool", async () => {
+  it("forces tool_use with the send_reply tool", async () => {
     mockCreate.mockResolvedValueOnce(makeFullResponse());
     const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
     await c.sendReply(SAMPLE_SEND_REPLY_ARGS);
 
     expect(mockCreate).toHaveBeenCalledOnce();
     const callArg = mockCreate.mock.calls[0]![0]!;
-    expect(callArg.tool_choice).toEqual({
-      type: "tool",
-      name: "send_reply_metadata",
-    });
-    expect(callArg.tools[0].name).toBe("send_reply_metadata");
+    expect(callArg.tool_choice).toEqual({ type: "tool", name: "send_reply" });
+    expect(callArg.tools[0].name).toBe("send_reply");
     expect(callArg.temperature).toBe(0.6);
     expect(callArg.max_tokens).toBe(600);
-    // P4r-3: tool_use schema no longer contains `reply` in required.
-    expect(callArg.tools[0].input_schema.required).not.toContain("reply");
-    expect(callArg.tools[0].input_schema.properties).not.toHaveProperty("reply");
+    // Single-tool: reply field is part of the schema.
+    expect(callArg.tools[0].input_schema.required).toContain("reply");
+    expect(callArg.tools[0].input_schema.properties).toHaveProperty("reply");
   });
 
   it("threads cacheControl through to Anthropic's cache_control marker", async () => {
@@ -452,5 +475,149 @@ describe("AnthropicError.retriesUsed propagates to thrown errors", () => {
     const e = (await promise) as AnthropicError;
     expect(e).toBeInstanceOf(AnthropicError);
     expect(e.retriesUsed).toBe(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P4r-4 — streamReply
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("RealClaudeClient.streamReply — happy path", () => {
+  it("yields chunked deltas then a done event with the full result", async () => {
+    mockStream.mockReturnValueOnce(
+      fakeMessageStream(
+        makeFullResponse({
+          reply: "Hello world! How can I help you today?",
+          language: "en",
+          groundedness: 0.85,
+          citationsUsed: [1],
+          inputTokens: 1200,
+          outputTokens: 80,
+        }),
+      ),
+    );
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+
+    const events: Array<
+      | { type: "delta"; text: string }
+      | { type: "done"; replyLen: number; modelId: string }
+    > = [];
+    for await (const event of c.streamReply(SAMPLE_SEND_REPLY_ARGS)) {
+      if (event.type === "delta") events.push({ type: "delta", text: event.text });
+      else
+        events.push({
+          type: "done",
+          replyLen: event.result.toolArgs.reply.length,
+          modelId: event.result.modelId,
+        });
+    }
+
+    const deltaCount = events.filter((e) => e.type === "delta").length;
+    const doneCount = events.filter((e) => e.type === "done").length;
+    expect(doneCount).toBe(1);
+    expect(deltaCount).toBeGreaterThan(0);
+
+    // Reassembling the deltas reproduces the full reply.
+    const reassembled = events
+      .filter((e): e is { type: "delta"; text: string } => e.type === "delta")
+      .map((e) => e.text)
+      .join("");
+    expect(reassembled).toBe("Hello world! How can I help you today?");
+
+    // Done event carries the full result (reply in toolArgs).
+    const doneEvent = events.find((e) => e.type === "done");
+    expect(doneEvent).toBeDefined();
+  });
+
+  it("forwards the SDK signal to messages.stream", async () => {
+    mockStream.mockReturnValueOnce(fakeMessageStream(makeFullResponse()));
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+
+    const externalSignal = new AbortController().signal;
+    const iter = c.streamReply(SAMPLE_SEND_REPLY_ARGS, { signal: externalSignal });
+    // Drain to trigger the underlying call.
+    for await (const _ of iter) {
+      void _;
+    }
+
+    expect(mockStream).toHaveBeenCalledOnce();
+    const callOpts = mockStream.mock.calls[0]![1]!;
+    // The signal passed in is the union of timeout + external; we just
+    // assert SOMETHING was passed.
+    expect(callOpts.signal).toBeDefined();
+    expect(typeof callOpts.signal.aborted).toBe("boolean");
+  });
+});
+
+describe("RealClaudeClient.streamReply — error states", () => {
+  it("throws AnthropicToolRefusalError when the response has no tool_use and no text", async () => {
+    mockStream.mockReturnValueOnce(fakeMessageStream(makeRefusalResponse()));
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+
+    let caught: unknown;
+    try {
+      for await (const _ of c.streamReply(SAMPLE_SEND_REPLY_ARGS)) {
+        void _;
+      }
+    } catch (err) {
+      caught = err;
+    }
+    const { AnthropicToolRefusalError } = await import("./errors");
+    expect(caught).toBeInstanceOf(AnthropicToolRefusalError);
+  });
+
+  it("throws AnthropicMissingMetadataError when text content arrives but tool_use is missing", async () => {
+    mockStream.mockReturnValueOnce(
+      fakeMessageStream(makeTextOnlyResponse("Reply text without metadata.")),
+    );
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+
+    let caught: unknown;
+    try {
+      for await (const _ of c.streamReply(SAMPLE_SEND_REPLY_ARGS)) {
+        void _;
+      }
+    } catch (err) {
+      caught = err;
+    }
+    const { AnthropicMissingMetadataError } = await import("./errors");
+    expect(caught).toBeInstanceOf(AnthropicMissingMetadataError);
+    expect((caught as InstanceType<typeof AnthropicMissingMetadataError>).replyText).toBe(
+      "Reply text without metadata.",
+    );
+  });
+
+  it("aborts mid-emit when the external signal fires after deltas have started", async () => {
+    // Build a response with a sufficiently long reply that delta emission
+    // takes multiple ticks; abort after the first delta.
+    mockStream.mockReturnValueOnce(
+      fakeMessageStream(
+        makeFullResponse({
+          reply: "x".repeat(200), // 200 codepoints → 25 chunks of 8 each
+        }),
+      ),
+    );
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+    const controller = new AbortController();
+
+    let deltaCount = 0;
+    let aborted = false;
+    try {
+      for await (const event of c.streamReply(SAMPLE_SEND_REPLY_ARGS, {
+        signal: controller.signal,
+      })) {
+        if (event.type === "delta") {
+          deltaCount += 1;
+          if (deltaCount === 2) controller.abort();
+        }
+      }
+    } catch (err) {
+      const { AnthropicTimeoutError } = await import("./errors");
+      if (err instanceof AnthropicTimeoutError) aborted = true;
+    }
+    expect(aborted).toBe(true);
+    // We received some deltas before the abort, but not all 25.
+    expect(deltaCount).toBeGreaterThanOrEqual(2);
+    expect(deltaCount).toBeLessThan(25);
   });
 });

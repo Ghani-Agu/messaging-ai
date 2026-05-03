@@ -358,8 +358,8 @@ class ScriptableClient implements ClaudeClient {
 
   pushSuccess(overrides?: Partial<SendReplyResult>): void {
     this.scripts.push(async () => ({
-      reply: "real reply",
       toolArgs: {
+        reply: "real reply",
         language: "en",
         groundedness: 0.9,
         citations_used: [1, 2],
@@ -811,6 +811,108 @@ describe("runBrain — P4r-3 [brain-cache] cache-invalidation observability", ()
     expect(blockALines[0]![0]).toMatch(/sha=[0-9a-f]{12}/);
     expect(blockALines[0]![0]).toMatch(/tokens=\d+/);
     logSpy.mockRestore();
+  });
+
+  it("runBrainStream uses streamReply when the active client implements it", async () => {
+    // Hand-build a client that implements both sendReply (no-op fallback)
+    // and streamReply (yields canned events). Spy to verify which one
+    // runBrainStream actually called.
+    const sendSpy = vi.fn();
+    const streamSpy = vi.fn();
+
+    class StreamingClient implements ClaudeClient {
+      async sendReply(args: SendReplyArgs): Promise<SendReplyResult> {
+        sendSpy(args);
+        return {
+          toolArgs: {
+            reply: "via sendReply",
+            language: "en",
+            groundedness: 0.9,
+            citations_used: [1, 2],
+            escalation_recommended: false,
+          },
+          modelId: "test",
+          usage: null,
+          retriesUsed: 0,
+        };
+      }
+      async *streamReply(
+        args: SendReplyArgs,
+        opts?: { signal?: AbortSignal },
+      ) {
+        streamSpy(args, opts);
+        yield { type: "delta" as const, text: "Hello " };
+        yield { type: "delta" as const, text: "world!" };
+        yield {
+          type: "done" as const,
+          result: {
+            toolArgs: {
+              reply: "Hello world!",
+              language: "en" as const,
+              groundedness: 0.9,
+              citations_used: [1, 2],
+              escalation_recommended: false,
+            },
+            modelId: "test-stream",
+            usage: { inputTokens: 100, outputTokens: 10 },
+            retriesUsed: 0,
+          },
+        };
+      }
+    }
+
+    const client = new StreamingClient();
+    __setClaudeClientForTests(client);
+
+    const events: Array<{ type: string; text?: string }> = [];
+    for await (const event of (await import("./orchestrator")).runBrainStream({
+      tenantId: "tenant-1",
+      conversationId: "conv-stream",
+      message: "hi",
+    })) {
+      if (event.type === "delta") events.push({ type: "delta", text: event.text });
+      else events.push({ type: "done" });
+    }
+
+    // streamReply was called exactly once; sendReply was not called.
+    expect(streamSpy).toHaveBeenCalledOnce();
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    // Deltas from streamReply forwarded as-is, then done.
+    const deltas = events.filter((e) => e.type === "delta");
+    expect(deltas.map((e) => e.text)).toEqual(["Hello ", "world!"]);
+    expect(events[events.length - 1]?.type).toBe("done");
+  });
+
+  it("runBrainStream falls back to chunk-after-the-fact for stub (no streamReply)", async () => {
+    // ScriptableClient (defined above in this file) has sendReply only,
+    // no streamReply. runBrainStream should call sendReply, then chunk
+    // synthetically.
+    const client = new ScriptableClient();
+    client.pushSuccess({
+      toolArgs: {
+        reply: "abcdefghijklmnop", // 16 chars → 2 chunks of 8 each
+        language: "en",
+        groundedness: 0.9,
+        citations_used: [1],
+        escalation_recommended: false,
+      },
+    });
+    __setClaudeClientForTests(client);
+
+    const events: Array<{ type: string; text?: string }> = [];
+    for await (const event of (await import("./orchestrator")).runBrainStream({
+      tenantId: "tenant-1",
+      message: "fallback path",
+    })) {
+      if (event.type === "delta") events.push({ type: "delta", text: event.text });
+      else events.push({ type: "done" });
+    }
+
+    const deltas = events.filter((e) => e.type === "delta");
+    // Reassembled text matches the stub's reply.
+    expect(deltas.map((e) => e.text).join("")).toBe("abcdefghijklmnop");
+    expect(events[events.length - 1]?.type).toBe("done");
   });
 
   it("emits [brain-cache] block-b once per tenant; re-logs when SHA changes", async () => {

@@ -18,6 +18,7 @@ import {
 import { embed } from "@/server/ai/embeddings";
 import { detectLanguage } from "@/lib/language-detect";
 import {
+  BLOCK_A_TEXT,
   buildPrompt,
   countTokens,
   type HistoryTurn,
@@ -31,8 +32,8 @@ import {
 } from "./confidence";
 import {
   getClaudeClient,
+  type SendReplyArgs,
   type SendReplyResult,
-  type SendReplyToolArgs,
   type SupportedReplyLanguage,
 } from "./claude-client";
 import {
@@ -45,28 +46,37 @@ import { CONVERSATION_RETRY_CAP } from "./anthropic-config";
 import { computeCostUsd, formatUsd } from "./pricing";
 import { getToolRefusalFallback } from "./fallbacks";
 import { createHash } from "node:crypto";
-import { BLOCK_A_TEXT } from "./prompts/system";
 
 /**
  * AI brain orchestrator.
  *
- * Public surface (stable across the stub→real ClaudeClient swap):
- *
+ * Public surface:
  *   runBrain({ tenantId, message, history }) → BrainResult
+ *   runBrainStream({ tenantId, message, history, signal })
+ *       → AsyncGenerator<{type:"delta",text} | {type:"done",result}>
  *
- * Pipeline:
- *   1. Load tenant + voice profile.
- *   2. Retrieve top-K chunks from the tenant's knowledge base.
- *   3. Build system blocks A/B + user-turn block C.
- *   4. Call Claude (or the stub) with the forced send_reply tool.
- *   5. Compute deterministic confidence post-tool-call.
- *   6. Maybe override escalation_reason to LOW_CONFIDENCE.
- *   7. Return a shaped result the route + UI consume.
+ * Pipeline (shared by both):
+ *   1. Load tenant + voice profile + operational facts (parallel).
+ *   2. Embed query, run retrieval (chunks / items / qna).
+ *   3. Build system blocks A/B + Block C user turn.
+ *   4. Token-budget guard.
+ *   5. Conversation retry-budget pre-check.
+ *   6. [brain-cache] log on first call per process / per tenant.
+ *   7. Call Claude:
+ *       - runBrain        → client.sendReply() (non-streaming).
+ *       - runBrainStream  → client.streamReply() if available, else
+ *                           sendReply() + chunk-after-the-fact.
+ *   8. Compute deterministic confidence, decide escalation.
+ *   9. Build BrainResult; emit cost log.
  *
- * Streaming variant is deferred along with the real ClaudeClient
- * (see claude-client.ts resumption checklist). This file's surface
- * stays stable when streaming lands — `runBrain` is non-streaming and
- * always exists; a future `runBrainStream` will join it.
+ * Error handling:
+ *   - AnthropicToolRefusalError → fallback BrainResult with TOOL_REFUSAL +
+ *     per-language fallback reply; conversation continues.
+ *   - AnthropicMissingMetadataError (defensive, rare) → reply text from the
+ *     partial response, escalation = LOW_CONFIDENCE, claudeReason =
+ *     MISSING_METADATA.
+ *   - All other AnthropicError → bubble up; widget route closes the stream
+ *     without `done` and shows the connection-lost banner.
  */
 
 // Performance budgets (Phase-4 Gate-1 §6, bumped in Phase-8b/c Gate-1).
@@ -74,8 +84,6 @@ const MAX_REPLY_TOKENS = 600;
 // Phase 8b bumped 6000 → 8000 for tier-1 ops facts in Block B; Phase 8c
 // keeps 8000 with explicit per-section caps in Block C (items / qna /
 // facts each have their own ceiling enforced via top-K + content trim).
-// Per-section budgets are aspirational; this guard is the last-line
-// failsafe before an API call.
 const MAX_INPUT_TOKEN_HEADROOM = 8000;
 
 // Per-channel retrieval top-K. Chunks scale down to 5 when items are
@@ -86,6 +94,13 @@ const TOP_K_CHUNKS_WITH_ITEMS = 5;
 const TOP_K_ITEMS = 5;
 const TOP_K_QNA = 1; // top-1 above threshold; multi-Q&A blending is post-v1
 const HISTORY_TURNS_DEFAULT = 8;
+
+// Synthetic streaming pacing (P4r-4). Same constants RealClaudeClient.streamReply
+// uses internally — kept here for the stub-fallback path where the orchestrator
+// chunks-after-the-fact. Codepoints (not bytes) so multi-byte sequences
+// (Arabic, Darija Arabic-script) never get split mid-character.
+const STREAM_CHUNK_CODEPOINTS = 8;
+const STREAM_INTER_CHUNK_DELAY_MS = 35;
 
 export type BrainHistoryTurn = HistoryTurn;
 
@@ -103,6 +118,13 @@ export type BrainInput = {
   history?: BrainHistoryTurn[];
   /** Override retrieval top-K. Default: 8. */
   topK?: number;
+  /**
+   * P4r-4: abort signal for streaming. The widget route hooks this into
+   * its ReadableStream cancel callback so closing the customer connection
+   * cancels the upstream Anthropic call. Only consumed by runBrainStream
+   * → client.streamReply; runBrain ignores it.
+   */
+  signal?: AbortSignal;
 };
 
 /**
@@ -111,11 +133,6 @@ export type BrainInput = {
  * Trade-off accepted: a process restart resets the budget for in-flight
  * conversations. For v1 this is fine — the budget exists to short-circuit
  * runaway retry storms within a session, not to enforce a hard SLA.
- *
- * The Map is uncapped on entry count; for v1 a single process won't see
- * enough concurrent conversations to matter. If we ever do, swap to an
- * LRU-with-TTL — the contract here is just "increment per non-zero
- * retriesUsed, reset on a clean turn".
  */
 const conversationRetryBudget = new Map<string, number>();
 
@@ -126,16 +143,6 @@ export function __resetConversationRetryBudgetForTests(): void {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // [brain-cache] cache-invalidation logging (P4r-3 Gate-1 B)
-//
-// Anthropic prompt caching is keyed on byte-level content. Any edit to
-// BLOCK_A_TEXT invalidates the platform-rules cache process-wide; any
-// per-tenant edit (voice profile, tier-1 facts) invalidates that
-// tenant's Block B cache. Both cost +25% input on the first call after
-// the change.
-//
-// We log a SHA-256 prefix per block on first occurrence so operators
-// can grep `[brain-cache]` and see when the prompt content rotated —
-// the proxy signal for cache-invalidation events.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BLOCK_A_SHA = sha12(BLOCK_A_TEXT);
@@ -170,13 +177,15 @@ export function __resetBrainCacheLogForTests(): void {
   blockBLastSHAByTenant.clear();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BrainResult / BrainCitation types
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * BrainResult.citations is a flat array indexed [1]..[N] in Block C, with
  * a `kind` discriminator per entry so dashboards can render badges and
  * operators can audit which knowledge type the AI's answer came from
- * (Gate-1 P8c note 4). Numbering is unified across kinds because Claude's
- * `send_reply.citations_used` is a single integer array — see
- * prompts/system.ts for the per-kind rendering shape.
+ * (Gate-1 P8c note 4).
  */
 export type BrainCitation =
   | {
@@ -208,12 +217,6 @@ export type BrainCitation =
       question: string;
       preview: string;
       score: number;
-      /**
-       * Phase 8e-3: true when the match fired below the same-language
-       * threshold (cross-language relaxed path). Surfaced as a small
-       * indicator in the conversations dashboard so operators can spot
-       * cross-language false positives during reviews.
-       */
       crossLanguageMatch: boolean;
     }
   | {
@@ -226,38 +229,136 @@ export type BrainCitation =
 export type BrainResult = {
   reply: string;
   language: SupportedReplyLanguage;
-  /** All citations the orchestrator surfaced to Claude. */
   citations: BrainCitation[];
-  /** Subset (by 1-based index) Claude reported using. */
   citationsUsed: number[];
-  /** Self-reported by Claude (0..1). */
   groundedness: number;
-  /** Deterministic, computed post-tool-call by computeConfidence(). */
   confidence: number;
-  /** Final escalation decision after the LOW_CONFIDENCE override. */
   escalation: EscalationReason | null;
-  /**
-   * Diagnostic envelope — what Claude originally returned, before the
-   * orchestrator's overrides. Surfaced into Message.aiMetadata so we can
-   * see the divergence in analytics later.
-   */
   aiMetadata: {
     modelId: string;
     claudeRecommendedEscalation: boolean;
     claudeReason: EscalationReason | null;
     topChunkSimilarity: number;
-    /** Note: stub client returns null here. */
-    usage: { inputTokens: number; outputTokens: number } | null;
+    usage: SendReplyResult["usage"];
   };
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal shared state passed between prep → call → finalize
+// ─────────────────────────────────────────────────────────────────────────────
+
+type CallContext = {
+  tenantId: string;
+  conversationId: string | undefined;
+  trimmedMessage: string;
+  detectedLanguage: SupportedReplyLanguage;
+  brainCitations: BrainCitation[];
+  topChunkSimilarity: number;
+  args: SendReplyArgs;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public entry points
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Run the brain end-to-end. Always returns a shaped result; throws only
- * for exceptional conditions (tenant not found, retrieval crash, Claude
- * client crash). Off-topic / no-citation answers come back as a normal
- * BrainResult with `escalation === "OUTSIDE_SCOPE"`.
+ * Non-streaming variant. Always returns a shaped result; throws only for
+ * exceptional conditions (tenant not found, retrieval crash, hard
+ * AnthropicError).
  */
 export async function runBrain(input: BrainInput): Promise<BrainResult> {
+  const ctx = await prepareCallContext(input);
+  checkConversationBudget(ctx);
+
+  const client = getClaudeClient();
+  let claudeResult: SendReplyResult;
+  try {
+    claudeResult = await client.sendReply(ctx.args);
+  } catch (err) {
+    return handleClaudeError(ctx, err);
+  }
+  return finalizeBrainResult(ctx, claudeResult);
+}
+
+export type BrainStreamDelta = { type: "delta"; text: string };
+export type BrainStreamDone = { type: "done"; result: BrainResult };
+export type BrainStreamEvent = BrainStreamDelta | BrainStreamDone;
+
+/**
+ * Streaming variant. AsyncGenerator yielding zero or more `delta` events
+ * followed by exactly one `done` event with the complete BrainResult.
+ *
+ * Two paths:
+ *   - Real client (RealClaudeClient.streamReply available): forwards the
+ *     SDK stream's delta events; the upstream HTTP connection stays open
+ *     and can be cancelled via input.signal.
+ *   - Stub fallback: calls sendReply, then synthesizes chunked deltas
+ *     after-the-fact at the same cadence the real client uses internally
+ *     (matched UX so the stub-mode dashboard demo feels paced).
+ *
+ * P4r-4 design note: the real client's streamReply ALSO chunks-after-
+ * the-fact internally because Sonnet 4.6's forced tool_use is exclusive
+ * — there's no genuine per-token streaming to forward. The streaming
+ * path's value is abort propagation (closing the customer connection
+ * cancels the upstream call) and infrastructure-readiness for any future
+ * model where real per-token streaming becomes possible.
+ */
+export async function* runBrainStream(
+  input: BrainInput,
+): AsyncGenerator<BrainStreamEvent> {
+  const ctx = await prepareCallContext(input);
+  checkConversationBudget(ctx);
+
+  const client = getClaudeClient();
+
+  if (client.streamReply) {
+    let claudeResult: SendReplyResult | null = null;
+    try {
+      for await (const event of client.streamReply(ctx.args, {
+        signal: input.signal,
+      })) {
+        if (event.type === "delta") {
+          yield { type: "delta", text: event.text };
+        } else {
+          claudeResult = event.result;
+        }
+      }
+    } catch (err) {
+      // Soft-failure paths (TOOL_REFUSAL / MISSING_METADATA) → synthesize
+      // fallback BrainResult, chunk its reply text, yield done.
+      const fallback = handleClaudeError(ctx, err); // throws on hard error
+      yield* chunkReplyAsDeltas(fallback.reply);
+      yield { type: "done", result: fallback };
+      return;
+    }
+    if (!claudeResult) {
+      throw new Error(
+        "runBrainStream: client.streamReply ended without a done event",
+      );
+    }
+    const result = finalizeBrainResult(ctx, claudeResult);
+    yield { type: "done", result };
+    return;
+  }
+
+  // Stub fallback: sendReply, then chunk-after-the-fact. The chunking
+  // matches the real client's internal pacing.
+  let result: BrainResult;
+  try {
+    const claudeResult = await client.sendReply(ctx.args);
+    result = finalizeBrainResult(ctx, claudeResult);
+  } catch (err) {
+    result = handleClaudeError(ctx, err); // throws on hard error
+  }
+  yield* chunkReplyAsDeltas(result.reply);
+  yield { type: "done", result };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prep — everything before the Claude call (shared by runBrain + runBrainStream)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function prepareCallContext(input: BrainInput): Promise<CallContext> {
   const { tenantId, message } = input;
   const trimmedMessage = message.trim();
   const history = (input.history ?? []).slice(-HISTORY_TURNS_DEFAULT);
@@ -284,19 +385,8 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
   });
   const queryVector = queryEmbedding.vectors[0]!;
 
-  // Pre-Claude language detection feeds Q&A languageLock filtering.
-  // Claude reports its own self-detected language in send_reply.language
-  // afterward — we use that as the authoritative reply-language signal.
   const detectedLanguage = detectLanguage(trimmedMessage);
 
-  // Decide chunk top-K based on whether items are likely to be relevant.
-  // Conservative: we don't know yet whether items WILL be returned, but
-  // using the lower top-K when items might fire keeps the budget tight.
-  // The override hits when the tenant has zero items (countItems would
-  // tell us but is an extra round-trip; the cheap check is "did items
-  // come back from retrieval"). Today we use the lower number whenever
-  // items retrieval is on; the orchestrator could be smarter if budget
-  // pressure becomes a problem.
   const itemRetrieval = retrieveItems({
     tenantId,
     query: trimmedMessage,
@@ -311,16 +401,13 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
     topK: TOP_K_QNA,
   });
 
-  // Run items + qna retrieval in parallel; chunks fires after we know
-  // whether items came back (so we can pick the right top-K). This serial
-  // wait is cheap because both qna and items are fast vector lookups
-  // (HNSW indexed) — typically ~10–30ms.
   const [retrievedItems, retrievedQna] = await Promise.all([
     itemRetrieval,
     qnaRetrieval,
   ]);
 
-  const chunkTopK = retrievedItems.length > 0 ? TOP_K_CHUNKS_WITH_ITEMS : TOP_K_CHUNKS_NO_ITEMS;
+  const chunkTopK =
+    retrievedItems.length > 0 ? TOP_K_CHUNKS_WITH_ITEMS : TOP_K_CHUNKS_NO_ITEMS;
   const retrievedChunks: RetrievedChunk[] = await retrieveChunks({
     tenantId,
     query: trimmedMessage,
@@ -328,16 +415,12 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
     topK: chunkTopK,
   });
 
-  // Tier-2 operational facts: keyword-gated relevance. Only the matched
-  // fields land in Block C — keeps the section bounded.
   const tier2Flags = detectTier2Relevance(trimmedMessage);
   const relevantTier2 = pickRelevantTier2(factsData, tier2Flags);
 
   // Build the unified citation list. ORDER MATTERS: items first (so
   // Block A's "prefer structured items" rule reads naturally on the
   // numbered citations), then chunks, then qna, then operational facts.
-  // The `index` field on each citation is its 1-based position in this
-  // list — the same number Claude sees as `[N]` in Block C.
   const renderedCitations: RenderedCitation[] = [];
   const brainCitations: BrainCitation[] = [];
 
@@ -433,21 +516,16 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
     message: trimmedMessage,
   });
 
-  // Token-budget guard with the actual cl100k tokenizer (was a 4-chars
-  // /token heuristic in Phase 4). Tighter signal at the cost of one
-  // synchronous tokenization per call — acceptable; cl100k_base is
-  // an array lookup, not a network round-trip.
+  // Token-budget guard with the actual cl100k tokenizer.
   const inputTokens =
-    system.reduce((n, b) => n + countTokens(b.text), 0) + countTokens(userMessage);
+    system.reduce((n, b) => n + countTokens(b.text), 0) +
+    countTokens(userMessage);
   if (inputTokens > MAX_INPUT_TOKEN_HEADROOM) {
     throw new Error(
       `prompt exceeds input-token budget (${inputTokens} > ${MAX_INPUT_TOKEN_HEADROOM})`,
     );
   }
 
-  // Dev-mode instrumentation — log per-section token counts so we can
-  // see real distributions vs the per-section caps without instrumenting
-  // the production hot path. Compact one-liner per call.
   if (process.env.NODE_ENV !== "production") {
     const blockA = countTokens(system[0]?.text ?? "");
     const blockB = countTokens(system[1]?.text ?? "");
@@ -460,165 +538,174 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
     );
   }
 
-  // Pre-Claude top-similarity computation (also used for fallback paths).
+  // [brain-cache] log on first call per process / tenant.
+  maybeLogBlockACache();
+  maybeLogBlockBCache(tenantId, system[1]?.text ?? "");
+
+  // Top retrieval-truth signal: prefer the strongest of chunk / item /
+  // qna similarity. The confidence formula treats this as "how grounded
+  // was retrieval".
   const topChunkScore = retrievedChunks[0]?.vectorScore ?? 0;
   const topItemScore = retrievedItems[0]?.vectorScore ?? 0;
   const topQnaScore = retrievedQna[0]?.score ?? 0;
   const topChunkSimilarity = Math.max(topChunkScore, topItemScore, topQnaScore);
 
-  // Per-conversation retry budget enforcement (Gate-1 K5). When the
-  // cumulative retry counter would exceed the cap, fail fast — don't
-  // even attempt the API call. Counter resets when a turn succeeds with
-  // retriesUsed === 0. Smart-import / one-shot calls (no conversationId)
-  // skip the budget entirely.
-  const convId = input.conversationId;
-  if (convId) {
-    const used = conversationRetryBudget.get(convId) ?? 0;
-    if (used >= CONVERSATION_RETRY_CAP) {
-      const err = new AnthropicConversationBudgetExhaustedError(
-        used,
-        CONVERSATION_RETRY_CAP,
-      );
-      logBrainError({
-        tenantId,
-        conversationId: convId,
-        err,
-      });
-      throw err;
-    }
-  }
+  return {
+    tenantId,
+    conversationId: input.conversationId,
+    trimmedMessage,
+    detectedLanguage,
+    brainCitations,
+    topChunkSimilarity,
+    args: { system, userMessage, maxTokens: MAX_REPLY_TOKENS },
+  };
+}
 
-  // [brain-cache] cache-invalidation observability (P4r-3 Gate-1 B).
-  // Logged once per process for Block A and once per tenant for Block B
-  // (re-logged when SHA changes — that's the invalidation signal).
-  maybeLogBlockACache();
-  maybeLogBlockBCache(tenantId, system[1]?.text ?? "");
+// ─────────────────────────────────────────────────────────────────────────────
+// Conversation retry budget (Gate-1 K5)
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const client = getClaudeClient();
-  let claudeResult;
-  try {
-    claudeResult = await client.sendReply({
-      system,
-      userMessage,
-      maxTokens: MAX_REPLY_TOKENS,
+function checkConversationBudget(ctx: CallContext): void {
+  if (!ctx.conversationId) return;
+  const used = conversationRetryBudget.get(ctx.conversationId) ?? 0;
+  if (used >= CONVERSATION_RETRY_CAP) {
+    const err = new AnthropicConversationBudgetExhaustedError(
+      used,
+      CONVERSATION_RETRY_CAP,
+    );
+    logBrainError({
+      tenantId: ctx.tenantId,
+      conversationId: ctx.conversationId,
+      err,
     });
-  } catch (err) {
-    // Bookkeeping: even on failure, the retries the client used count
-    // against the conversation's budget.
-    if (convId && err instanceof AnthropicError) {
-      const prior = conversationRetryBudget.get(convId) ?? 0;
-      conversationRetryBudget.set(convId, prior + (err.retriesUsed ?? 0));
-    }
-
-    // Tool-use refusal: synthesize a deterministic fallback BrainResult
-    // (Gate-1 E + 'other decisions') so the conversation continues
-    // gracefully and the gap-logger picks up the OUTSIDE_SCOPE.
-    if (err instanceof AnthropicToolRefusalError) {
-      logBrainRefusal({
-        tenantId,
-        conversationId: convId,
-        err,
-        customerMessage: trimmedMessage,
-      });
-      return {
-        reply: getToolRefusalFallback(detectedLanguage),
-        language: detectedLanguage,
-        citations: brainCitations,
-        citationsUsed: [],
-        groundedness: 0,
-        confidence: 0,
-        escalation: "OUTSIDE_SCOPE",
-        aiMetadata: {
-          modelId: "anthropic:tool-refusal",
-          claudeRecommendedEscalation: true,
-          claudeReason: "TOOL_REFUSAL",
-          topChunkSimilarity,
-          usage: null,
-        },
-      };
-    }
-
-    // P4r-3 schema-split: reply text arrived, metadata tool didn't.
-    // The reply is usable; we synthesize defaults for the metadata
-    // we don't have, force LOW_CONFIDENCE escalation, and tag
-    // claudeReason = MISSING_METADATA so the divergence is visible
-    // in analytics.
-    if (err instanceof AnthropicMissingMetadataError) {
-      logBrainError({
-        tenantId,
-        conversationId: convId,
-        err,
-      });
-      // [brain-cost] still fires — the call did happen, tokens were
-      // consumed. Log with the usage from the partial response.
-      if (err.usage) {
-        logBrainCost({
-          tenantId,
-          modelId: err.modelId,
-          usage: err.usage,
-          retriesUsed: err.retriesUsed,
-        });
-      }
-      return {
-        reply: err.replyText,
-        language: detectedLanguage,
-        citations: brainCitations,
-        citationsUsed: [],
-        groundedness: 0,
-        confidence: 0,
-        escalation: "LOW_CONFIDENCE",
-        aiMetadata: {
-          modelId: err.modelId,
-          claudeRecommendedEscalation: true,
-          claudeReason: "MISSING_METADATA",
-          topChunkSimilarity,
-          usage: err.usage,
-        },
-      };
-    }
-
-    // All other Anthropic errors: log structured then bubble up. The route
-    // handler's stream closes without `done` and the widget renders the
-    // existing connection-lost banner (Gate-1 K8).
-    if (err instanceof AnthropicError) {
-      logBrainError({
-        tenantId,
-        conversationId: convId,
-        err,
-      });
-    }
     throw err;
   }
+}
 
-  // Bookkeeping: update the conversation retry budget. retriesUsed === 0
-  // resets the counter; > 0 accumulates.
-  if (convId) {
-    if (claudeResult.retriesUsed === 0) conversationRetryBudget.set(convId, 0);
-    else {
-      const prior = conversationRetryBudget.get(convId) ?? 0;
-      conversationRetryBudget.set(convId, prior + claudeResult.retriesUsed);
-    }
+function updateConversationBudgetOnError(
+  conversationId: string | undefined,
+  err: AnthropicError,
+): void {
+  if (!conversationId) return;
+  const prior = conversationRetryBudget.get(conversationId) ?? 0;
+  conversationRetryBudget.set(conversationId, prior + (err.retriesUsed ?? 0));
+}
+
+function updateConversationBudgetOnSuccess(
+  conversationId: string | undefined,
+  retriesUsed: number,
+): void {
+  if (!conversationId) return;
+  if (retriesUsed === 0) {
+    conversationRetryBudget.set(conversationId, 0);
+    return;
+  }
+  const prior = conversationRetryBudget.get(conversationId) ?? 0;
+  conversationRetryBudget.set(conversationId, prior + retriesUsed);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Error handling — turns Anthropic errors into BrainResult fallbacks or rethrow
+// ─────────────────────────────────────────────────────────────────────────────
+
+function handleClaudeError(ctx: CallContext, err: unknown): BrainResult {
+  if (err instanceof AnthropicError) {
+    updateConversationBudgetOnError(ctx.conversationId, err);
   }
 
-  const tool: SendReplyToolArgs = claudeResult.toolArgs;
+  if (err instanceof AnthropicToolRefusalError) {
+    logBrainRefusal({
+      tenantId: ctx.tenantId,
+      conversationId: ctx.conversationId,
+      err,
+      customerMessage: ctx.trimmedMessage,
+    });
+    return {
+      reply: getToolRefusalFallback(ctx.detectedLanguage),
+      language: ctx.detectedLanguage,
+      citations: ctx.brainCitations,
+      citationsUsed: [],
+      groundedness: 0,
+      confidence: 0,
+      escalation: "OUTSIDE_SCOPE",
+      aiMetadata: {
+        modelId: "anthropic:tool-refusal",
+        claudeRecommendedEscalation: true,
+        claudeReason: "TOOL_REFUSAL",
+        topChunkSimilarity: ctx.topChunkSimilarity,
+        usage: null,
+      },
+    };
+  }
 
-  // [brain-cost] log on the happy path. Stub returns null and is skipped.
+  if (err instanceof AnthropicMissingMetadataError) {
+    logBrainError({
+      tenantId: ctx.tenantId,
+      conversationId: ctx.conversationId,
+      err,
+    });
+    if (err.usage) {
+      logBrainCost({
+        tenantId: ctx.tenantId,
+        modelId: err.modelId,
+        usage: err.usage,
+        retriesUsed: err.retriesUsed,
+      });
+    }
+    return {
+      reply: err.replyText,
+      language: ctx.detectedLanguage,
+      citations: ctx.brainCitations,
+      citationsUsed: [],
+      groundedness: 0,
+      confidence: 0,
+      escalation: "LOW_CONFIDENCE",
+      aiMetadata: {
+        modelId: err.modelId,
+        claudeRecommendedEscalation: true,
+        claudeReason: "MISSING_METADATA",
+        topChunkSimilarity: ctx.topChunkSimilarity,
+        usage: err.usage,
+      },
+    };
+  }
+
+  if (err instanceof AnthropicError) {
+    logBrainError({
+      tenantId: ctx.tenantId,
+      conversationId: ctx.conversationId,
+      err,
+    });
+  }
+  throw err;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finalize — builds BrainResult from successful claudeResult + ctx
+// ─────────────────────────────────────────────────────────────────────────────
+
+function finalizeBrainResult(
+  ctx: CallContext,
+  claudeResult: SendReplyResult,
+): BrainResult {
+  updateConversationBudgetOnSuccess(ctx.conversationId, claudeResult.retriesUsed);
+
   if (claudeResult.usage) {
     logBrainCost({
-      tenantId,
+      tenantId: ctx.tenantId,
       modelId: claudeResult.modelId,
       usage: claudeResult.usage,
       retriesUsed: claudeResult.retriesUsed,
     });
   }
 
+  const tool = claudeResult.toolArgs;
   const confidence = computeConfidence({
     groundedness: tool.groundedness,
-    topChunkSimilarity,
+    topChunkSimilarity: ctx.topChunkSimilarity,
     citationsUsedCount: tool.citations_used.length,
     escalationRecommended: tool.escalation_recommended,
   });
-
   const escalation = decideEscalation({
     confidence,
     claudeRecommended: tool.escalation_recommended,
@@ -626,9 +713,9 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
   });
 
   return {
-    reply: claudeResult.reply,
+    reply: tool.reply,
     language: tool.language,
-    citations: brainCitations,
+    citations: ctx.brainCitations,
     citationsUsed: tool.citations_used,
     groundedness: tool.groundedness,
     confidence,
@@ -637,16 +724,37 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
       modelId: claudeResult.modelId,
       claudeRecommendedEscalation: tool.escalation_recommended,
       claudeReason: tool.escalation_reason ?? null,
-      topChunkSimilarity,
+      topChunkSimilarity: ctx.topChunkSimilarity,
       usage: claudeResult.usage,
     },
   };
 }
 
-/**
- * [brain-cost] structured one-liner. Extracted so both the happy path
- * and the MISSING_METADATA fallback path can share the formatting.
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// Synthetic delta chunking (stub-fallback path + soft-failure replies)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function* chunkReplyAsDeltas(
+  reply: string,
+): AsyncGenerator<BrainStreamDelta> {
+  const codepoints = [...reply];
+  for (let i = 0; i < codepoints.length; i += STREAM_CHUNK_CODEPOINTS) {
+    const chunk = codepoints
+      .slice(i, i + STREAM_CHUNK_CODEPOINTS)
+      .join("");
+    yield { type: "delta", text: chunk };
+    if (i + STREAM_CHUNK_CODEPOINTS < codepoints.length) {
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, STREAM_INTER_CHUNK_DELAY_MS),
+      );
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Structured logs
+// ─────────────────────────────────────────────────────────────────────────────
+
 function logBrainCost(args: {
   tenantId: string;
   modelId: string;
@@ -658,7 +766,6 @@ function logBrainCost(args: {
   try {
     costUsd = computeCostUsd(modelId, usage);
   } catch {
-    // Unknown model in the pricing table — log zero rather than crash.
     costUsd = 0;
   }
   console.log(
@@ -670,12 +777,6 @@ function logBrainCost(args: {
   );
 }
 
-/**
- * Structured one-liner for Anthropic-side failures (Gate-1 K8). Lets ops
- * grep `[brain-error]` for outage windows without parsing stack traces.
- * Outages and content/safety refusals have different remediation paths,
- * so refusals get their own [brain-refusal] line (logBrainRefusal).
- */
 function logBrainError(args: {
   tenantId: string;
   conversationId?: string;
@@ -690,14 +791,6 @@ function logBrainError(args: {
   );
 }
 
-/**
- * P4r-3 split from [brain-error]: tool-refusal events (Claude returned
- * end_turn without a tool_use block). These are content/safety signals,
- * not infrastructure outages — different remediation paths, so they get
- * their own log channel. Includes the customer message truncated to 200
- * chars so operators can investigate refusal patterns without digging
- * through full transcripts.
- */
 const REFUSAL_MESSAGE_TRUNCATE_CHARS = 200;
 
 function logBrainRefusal(args: {
@@ -719,14 +812,9 @@ function logBrainRefusal(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// Misc helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Per-section token totals for dev-mode logging. Re-tokenizes just the
- * citation segments — cheap (cl100k is an array lookup) and avoids
- * threading per-section token counts through the prompt builders.
- */
 function sectionTokenCounts(citations: RenderedCitation[]): {
   items: number;
   chunks: number;
@@ -735,8 +823,6 @@ function sectionTokenCounts(citations: RenderedCitation[]): {
 } {
   const totals = { items: 0, chunks: 0, qna: 0, facts: 0 };
   for (const c of citations) {
-    // Cheap proxy: tokenize the JSON shape — close enough for distribution
-    // logging. Production telemetry can refine if needed.
     const tokens = countTokens(JSON.stringify(c));
     if (c.kind === "item") totals.items += tokens;
     else if (c.kind === "chunk") totals.chunks += tokens;
@@ -746,11 +832,6 @@ function sectionTokenCounts(citations: RenderedCitation[]): {
   return totals;
 }
 
-/**
- * Short preview string for an operational-fact citation — surfaced in
- * BrainResult.citations[].preview so the dashboard can show "Hours: Mon-Fri
- * 9-17" without the renderer-level rendering. Per-field summary, capped.
- */
 function factPreview(
   field: OperationalFactField,
   value: OperationalFactsTier2[OperationalFactField],
@@ -788,55 +869,4 @@ function extractUrl(c: RetrievedChunk): string | undefined {
   if (typeof m.url === "string") return m.url;
   if (typeof m.sourceURL === "string") return m.sourceURL;
   return undefined;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Streaming variant
-// ─────────────────────────────────────────────────────────────────────────────
-
-export type BrainStreamDelta = { type: "delta"; text: string };
-export type BrainStreamDone = { type: "done"; result: BrainResult };
-export type BrainStreamEvent = BrainStreamDelta | BrainStreamDone;
-
-/**
- * Streaming variant of runBrain. AsyncGenerator that yields zero or more
- * `delta` events (text fragments, in order) followed by exactly one
- * `done` event carrying the complete BrainResult.
- *
- * Current implementation: runBrain runs to completion (one round-trip),
- * then the reply is sliced into ~8-codepoint chunks emitted ~35ms apart.
- * This matches widget/src/api.ts's mockBrainStream cadence so the demo
- * feels paced.
- *
- * Codepoints, not bytes — `[...text]` yields proper Unicode codepoints
- * so multi-byte sequences (Arabic, Darija Arabic-script, emoji) never
- * get split mid-character. Slicing the resulting array and `.join("")`-
- * ing back is safe.
- *
- * Post-credits (CLAUDE.md §7a resumption checklist step 3): the
- * RealClaudeClient's streamReply will replace the runBrain-then-chunk
- * pattern with native Anthropic SSE streaming at upstream speed. The
- * route handler is unchanged — same yield shape, same delta/done
- * contract — only the body of this function swaps.
- */
-const STREAM_CHUNK_CODEPOINTS = 8;
-const STREAM_INTER_CHUNK_DELAY_MS = 35;
-
-export async function* runBrainStream(
-  input: BrainInput,
-): AsyncGenerator<BrainStreamEvent> {
-  const result = await runBrain(input);
-  const codepoints = [...result.reply];
-  for (let i = 0; i < codepoints.length; i += STREAM_CHUNK_CODEPOINTS) {
-    const chunk = codepoints
-      .slice(i, i + STREAM_CHUNK_CODEPOINTS)
-      .join("");
-    yield { type: "delta", text: chunk };
-    if (i + STREAM_CHUNK_CODEPOINTS < codepoints.length) {
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, STREAM_INTER_CHUNK_DELAY_MS),
-      );
-    }
-  }
-  yield { type: "done", result };
 }

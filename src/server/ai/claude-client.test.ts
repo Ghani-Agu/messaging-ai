@@ -77,8 +77,8 @@ describe("__setClaudeClientForTests — injection", () => {
     async sendReply(_args: SendReplyArgs): Promise<SendReplyResult> {
       this.sendReplyCalls += 1;
       return {
-        reply: "mock",
         toolArgs: {
+          reply: "mock",
           language: "en",
           groundedness: 1,
           citations_used: [],

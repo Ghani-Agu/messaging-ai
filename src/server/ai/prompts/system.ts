@@ -18,9 +18,10 @@ import type {
  * per-request runtime block) lives on the user turn, not here.
  *
  * Block A target: ≤ 800 input tokens (asserted by the unit test).
- * Block A measured: 594 tokens (Phase 4 design); 794 tokens after the
- * P4r-3 schema-split instructions (reply-as-content + send_reply_metadata
- * tool). cl100k_base tokenizer ≈ Claude's actual tokenizer ±5–10%.
+ * Block A measured: 594 tokens (cl100k_base ≈ Claude). P4r-3 briefly
+ * grew this to 794 with the schema-split instructions, then reverted
+ * in P4r-4 after the schema-validation probe found Sonnet 4.6's forced
+ * tool_use is exclusive (no text content alongside).
  *
  * Pure functions — no I/O, no globals, easy to unit-test.
  */
@@ -86,9 +87,7 @@ ESCALATION — set escalation_recommended: true when ANY hold, and pick the sing
 The orchestrator may override post-hoc with LOW_CONFIDENCE based on a deterministic groundedness-derived score.
 
 OUTPUT
-- Write your reply as natural response content — that text is what the customer sees.
-- Then call send_reply_metadata with: language, groundedness, citations_used, escalation_recommended, escalation_reason.
-- The tool carries metadata only; do not include reply text in its args.`;
+- You MUST respond by calling the send_reply tool. No free text.`;
 
 export function buildBlockA(): SystemBlock {
   // cacheControl: "ephemeral" → process-wide cache prefix (every tenant's
@@ -404,9 +403,7 @@ export function buildBlockC(args: {
   sections.push("NEW CUSTOMER MESSAGE");
   sections.push(message);
   sections.push("");
-  sections.push(
-    "Reply now: write the reply text as natural content, then call send_reply_metadata.",
-  );
+  sections.push("Reply now via send_reply.");
 
   return sections.join("\n");
 }
