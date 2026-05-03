@@ -275,7 +275,9 @@ describe("RealClaudeClient.sendReply — happy path", () => {
       { type: "text", text: "Block B", cache_control: { type: "ephemeral" } },
     ]);
     // Tools array also marked.
-    expect(callArg.tools[0].cache_control).toEqual({ type: "ephemeral" });
+    // P4r-5 cache adjustment: tools[] no longer carries cache_control.
+    // Single cumulative breakpoint at end of Block B is what actually caches.
+    expect(callArg.tools[0].cache_control).toBeUndefined();
   });
 
   it("omits cache_control when cacheControl is unset", async () => {
@@ -475,6 +477,139 @@ describe("AnthropicError.retriesUsed propagates to thrown errors", () => {
     const e = (await promise) as AnthropicError;
     expect(e).toBeInstanceOf(AnthropicError);
     expect(e.retriesUsed).toBe(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P4r-5 — structureItemsFromText
+// ─────────────────────────────────────────────────────────────────────────────
+
+function makeStructureItemsResponse(
+  items: Array<{ name: string; price?: string; brand?: string; sku?: string }>,
+  notes?: string,
+) {
+  return {
+    id: "msg_x",
+    type: "message",
+    role: "assistant",
+    model: "claude-sonnet-4-6",
+    stop_reason: "tool_use",
+    stop_sequence: null,
+    content: [
+      {
+        type: "tool_use" as const,
+        id: "toolu_x",
+        name: "structure_items",
+        input: { items, ...(notes ? { notes } : {}) },
+      },
+    ],
+    usage: {
+      input_tokens: 800,
+      output_tokens: 250,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+    },
+  };
+}
+
+describe("RealClaudeClient.structureItemsFromText — happy path", () => {
+  it("returns a StructureItemsResult mapped from the tool_use block", async () => {
+    mockCreate.mockResolvedValueOnce(
+      makeStructureItemsResponse(
+        [
+          { name: "Macbook Pro M3", brand: "Apple", price: "2200.00" },
+          { name: "iPhone 15", brand: "Apple", price: "799.00" },
+        ],
+        "extracted 2 items",
+      ),
+    );
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+    const r = await c.structureItemsFromText!({
+      text: "Macbook Pro M3 - 2200, iPhone 15 - 799",
+    });
+
+    expect(r.modelId).toBe("claude-sonnet-4-6");
+    expect(r.toolArgs.items).toHaveLength(2);
+    expect(r.toolArgs.items[0]!.name).toBe("Macbook Pro M3");
+    expect(r.toolArgs.notes).toBe("extracted 2 items");
+    expect(r.retriesUsed).toBe(0);
+    expect(r.usage?.inputTokens).toBe(800);
+  });
+
+  it("uses temperature 0.1, forced tool_use on structure_items, dedicated system prompt", async () => {
+    mockCreate.mockResolvedValueOnce(
+      makeStructureItemsResponse([{ name: "Sample" }]),
+    );
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+    await c.structureItemsFromText!({ text: "Sample product" });
+
+    const callArg = mockCreate.mock.calls[0]![0]!;
+    expect(callArg.temperature).toBe(0.1);
+    expect(callArg.tool_choice).toEqual({ type: "tool", name: "structure_items" });
+    expect(callArg.tools[0].name).toBe("structure_items");
+    // Dedicated smart-import system prompt — distinct from Block A.
+    expect(callArg.system[0].text).toContain("catalog data structurer");
+    expect(callArg.system[0].cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("forwards maxItems to the user prompt", async () => {
+    mockCreate.mockResolvedValueOnce(
+      makeStructureItemsResponse([{ name: "Sample" }]),
+    );
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+    await c.structureItemsFromText!({ text: "Some catalog", maxItems: 5 });
+
+    const userMessage = mockCreate.mock.calls[0]![0]!.messages[0]!.content;
+    expect(userMessage).toContain("up to 5");
+  });
+});
+
+describe("RealClaudeClient.structureItemsFromText — error states", () => {
+  it("retries on 5xx then succeeds with retriesUsed > 0", async () => {
+    vi.useFakeTimers();
+    mockCreate.mockRejectedValueOnce(
+      new APIError({ status: 500, message: "internal" }),
+    );
+    mockCreate.mockResolvedValueOnce(
+      makeStructureItemsResponse([{ name: "Sample" }]),
+    );
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+    const promise = c.structureItemsFromText!({ text: "x" });
+    await vi.advanceTimersByTimeAsync(600);
+    const r = await promise;
+    expect(r.retriesUsed).toBe(1);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it("401 → AnthropicAuthError, no retry", async () => {
+    mockCreate.mockRejectedValueOnce(
+      new APIError({ status: 401, message: "invalid api key" }),
+    );
+    const c = new RealClaudeClient({ apiKey: "sk-ant-bad" });
+    await expect(
+      c.structureItemsFromText!({ text: "anything" }),
+    ).rejects.toBeInstanceOf(AnthropicAuthError);
+    expect(mockCreate).toHaveBeenCalledOnce();
+  });
+
+  it("missing tool_use block → AnthropicToolRefusalError", async () => {
+    // Response with no tool_use block — should never happen with forced
+    // tool_use, but we throw cleanly if it does.
+    mockCreate.mockResolvedValueOnce({
+      id: "msg_x",
+      type: "message",
+      role: "assistant",
+      model: "claude-sonnet-4-6",
+      stop_reason: "end_turn",
+      stop_sequence: null,
+      content: [],
+      usage: { input_tokens: 100, output_tokens: 0 },
+    });
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+    const { AnthropicToolRefusalError } = await import("./errors");
+    await expect(
+      c.structureItemsFromText!({ text: "anything" }),
+    ).rejects.toBeInstanceOf(AnthropicToolRefusalError);
   });
 });
 

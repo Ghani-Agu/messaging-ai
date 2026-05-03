@@ -90,9 +90,15 @@ OUTPUT
 - You MUST respond by calling the send_reply tool. No free text.`;
 
 export function buildBlockA(): SystemBlock {
-  // cacheControl: "ephemeral" → process-wide cache prefix (every tenant's
-  // first call seeds it; all later calls hit it). 5-min TTL. P4r-3.
-  return { type: "text", text: BLOCK_A_TEXT, cacheControl: "ephemeral" };
+  // P4r-5 cache adjustment: removed the standalone Block-A cache_control
+  // marker. The cache-effectiveness probe (`npm run probe:cache`) found
+  // that splitting the prefix across three breakpoints (tools[], Block A,
+  // Block B) caused Anthropic to cache nothing — likely because at least
+  // one breakpoint segment landed below the per-marker minimum. Keeping
+  // only the Block-B marker means the full prefix (tools + Block A +
+  // Block B) is one cumulative cached segment — comfortably above the
+  // 1024-token Sonnet minimum.
+  return { type: "text", text: BLOCK_A_TEXT };
 }
 
 /**

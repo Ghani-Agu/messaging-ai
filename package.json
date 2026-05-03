@@ -31,6 +31,8 @@
     "verify:phase7": "dotenv -e .env.local -- tsx --conditions=react-server scripts/verify-phase7.ts",
     "probe:model": "dotenv -e .env.local -- tsx scripts/probe-anthropic-model.ts",
     "probe:schema": "dotenv -e .env.local -- tsx --conditions=react-server scripts/probe-schema-split.ts",
+    "probe:cache": "dotenv -e .env.local -- tsx --conditions=react-server scripts/probe-cache-effectiveness.ts",
+    "probe:smart-import": "dotenv -e .env.local -- tsx --conditions=react-server scripts/probe-smart-import.ts",
     "widget:dev": "npm --workspace @messaging-ai/widget run dev",
     "widget:build": "npm run widget:check-tokens && npm --workspace @messaging-ai/widget run build",
     "widget:tokens": "tsx scripts/generate-widget-tokens.ts",

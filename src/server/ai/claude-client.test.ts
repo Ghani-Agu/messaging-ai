@@ -98,6 +98,7 @@ describe("__setClaudeClientForTests — injection", () => {
         toolArgs: { items: [{ name: "mock-item" }], notes: "mock" },
         modelId: "mock",
         usage: null,
+        retriesUsed: 0,
       };
     }
   }

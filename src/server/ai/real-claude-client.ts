@@ -13,7 +13,7 @@ import {
 } from "./anthropic-config";
 import {
   SEND_REPLY_TOOL,
-  StubClaudeClient,
+  SEND_STRUCTURED_ITEMS_TOOL,
   type ClaudeClient,
   type SendReplyArgs,
   type SendReplyResult,
@@ -21,6 +21,7 @@ import {
   type StreamEvent,
   type StructureItemsArgs,
   type StructureItemsResult,
+  type StructureItemsToolArgs,
 } from "./claude-client";
 import {
   AnthropicAuthError,
@@ -75,6 +76,25 @@ const FIVE_XX_MAX_ATTEMPTS = 3;
 // for 50–200 word support replies.
 const STREAM_CHUNK_CODEPOINTS = 8;
 const STREAM_INTER_CHUNK_DELAY_MS = 35;
+
+// Smart-import (P4r-5). Operator pastes messy catalog text; Claude
+// extracts structured KnowledgeItem drafts the operator reviews and
+// approves. Temperature low for predictable extraction (Gate-1 K7).
+// max_tokens is generous because a typical paste might fan out to 10–20
+// items at ~80 tokens each.
+const SMART_IMPORT_TEMPERATURE = 0.1;
+const SMART_IMPORT_MAX_TOKENS = 4000;
+
+const SMART_IMPORT_SYSTEM_PROMPT = `You are a catalog data structurer for a SaaS that helps small businesses manage their product/service inventory. The operator will paste messy free-text catalog data — pulled from spreadsheets, websites, supplier lists, hand-typed lists. Your job is to extract structured items the operator can review and approve.
+
+Rules:
+- Call the structure_items tool with an array of items. NEVER output free text.
+- Each item MUST have a name. All other fields are optional — leave undefined when the source doesn't clearly state them. Don't fabricate.
+- For prices: extract the decimal number as a string, e.g. "199.00", "2200.50". Don't invent currencies — set currency only when the source uses a clear ISO code or symbol you can map to one.
+- For availability: only set when the source explicitly indicates stock state ("in stock", "available", "out of stock", "ships in 2 weeks"). Leave undefined when ambiguous.
+- For specs: pull out concrete key/value pairs ("ram: 16GB", "color: black", "capacity: 1L"). Don't include marketing copy as a spec.
+- If the source mixes products with non-product noise (intros, footers, page navigation), skip the noise.
+- Notes field: surface anything ambiguous ("3 prices listed in different currencies — picked DZD as primary", "no SKUs found, operator should add them"). Keep notes brief.`;
 
 type SystemBlockSdk = Anthropic.TextBlockParam;
 
@@ -220,16 +240,86 @@ export class RealClaudeClient implements ClaudeClient {
   }
 
   /**
-   * P4r-3 → P4r-5 placeholder. Real smart-import wires the SDK call with
-   * SEND_STRUCTURED_ITEMS_TOOL at temperature 0.1 in P4r-5; until then,
-   * delegate to a private StubClaudeClient instance so the operator's
-   * smart-import preview UI keeps working when ANTHROPIC_API_KEY is set.
-   * Remove this delegation and replace with the actual SDK call in P4r-5.
+   * Smart-import: convert messy free-text catalog data into structured
+   * KnowledgeItem drafts the operator can review and approve. P4r-5
+   * replaces the P4r-3/P4r-4 stub-delegation placeholder with a real
+   * SDK call.
+   *
+   * Temperature 0.1 (Gate-1 K7) — the operator wants deterministic,
+   * predictable extraction; varying outputs across runs would break the
+   * preview-then-approve UX. Forced tool_use on
+   * SEND_STRUCTURED_ITEMS_TOOL; same withRetry envelope as sendReply
+   * (429/5xx/network → typed errors with retry policy from K5).
    */
-  private readonly p4r5SmartImportPlaceholder = new StubClaudeClient();
+  async structureItemsFromText(
+    args: StructureItemsArgs,
+  ): Promise<StructureItemsResult> {
+    return this.withRetry(async () => this.structureItemsOnce(args));
+  }
 
-  async structureItemsFromText(args: StructureItemsArgs): Promise<StructureItemsResult> {
-    return this.p4r5SmartImportPlaceholder.structureItemsFromText!(args);
+  private async structureItemsOnce(
+    args: StructureItemsArgs,
+  ): Promise<StructureItemsResult> {
+    const maxItems = args.maxItems ?? 20;
+    const systemBlocks: SystemBlockSdk[] = [
+      {
+        type: "text",
+        text: SMART_IMPORT_SYSTEM_PROMPT,
+        cache_control: { type: "ephemeral" },
+      },
+    ];
+    const tools = buildStructureItemsTools();
+
+    let response: Anthropic.Messages.Message;
+    try {
+      response = await this.client.messages.create(
+        {
+          model: this.modelId,
+          max_tokens: SMART_IMPORT_MAX_TOKENS,
+          temperature: SMART_IMPORT_TEMPERATURE,
+          system: systemBlocks,
+          tools,
+          tool_choice: { type: "tool", name: SEND_STRUCTURED_ITEMS_TOOL.name },
+          messages: [
+            {
+              role: "user",
+              content: `Extract up to ${maxItems} structured items from this catalog text.\n\nTEXT:\n${args.text}`,
+            },
+          ],
+        },
+        { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+      );
+    } catch (err) {
+      throw mapSdkError(err);
+    }
+
+    const toolBlock = response.content.find(
+      (b): b is Anthropic.Messages.ToolUseBlock =>
+        b.type === "tool_use" && b.name === SEND_STRUCTURED_ITEMS_TOOL.name,
+    );
+    if (!toolBlock) {
+      // Forced tool_use returned nothing — treat as a refusal. Smart
+      // import has no graceful fallback; the Server Action surfaces the
+      // error to the operator who can paste different text.
+      throw new AnthropicToolRefusalError(
+        "Smart import: Anthropic returned no tool_use block",
+      );
+    }
+
+    const toolArgs = toolBlock.input as StructureItemsToolArgs;
+    const usage = response.usage;
+    return {
+      toolArgs,
+      modelId: response.model,
+      usage: {
+        inputTokens: usage.input_tokens,
+        outputTokens: usage.output_tokens,
+        cacheCreationInputTokens: usage.cache_creation_input_tokens ?? undefined,
+        cacheReadInputTokens: usage.cache_read_input_tokens ?? undefined,
+      },
+      // Filled in by withRetry on its way out.
+      retriesUsed: 0,
+    };
   }
 
   /**
@@ -385,15 +475,29 @@ function sleep(ms: number): Promise<void> {
  * the first cache breakpoint (identical across all calls).
  */
 function buildTools(): Anthropic.Messages.ToolUnion[] {
-  const cache_control: Anthropic.Messages.CacheControlEphemeral = {
-    type: "ephemeral",
-  };
+  // P4r-5 cache adjustment: removed the standalone tools-array cache
+  // breakpoint. See buildBlockA() in prompts/system.ts for the full
+  // explanation. Single cumulative breakpoint at end of Block B is
+  // what actually caches under Anthropic's minimum-segment-size rules.
   const tool: Anthropic.Messages.Tool = {
     name: SEND_REPLY_TOOL.name,
     description: SEND_REPLY_TOOL.description,
     input_schema:
       SEND_REPLY_TOOL.input_schema as unknown as Anthropic.Messages.Tool.InputSchema,
-    cache_control,
+  };
+  return [tool];
+}
+
+function buildStructureItemsTools(): Anthropic.Messages.ToolUnion[] {
+  // Smart-import (P4r-5). Single tool, single cache breakpoint at end of
+  // the system prompt — same rationale as the reply path. Caching helps
+  // when an operator runs multiple imports in one session (each call
+  // hits the cached system prefix).
+  const tool: Anthropic.Messages.Tool = {
+    name: SEND_STRUCTURED_ITEMS_TOOL.name,
+    description: SEND_STRUCTURED_ITEMS_TOOL.description,
+    input_schema:
+      SEND_STRUCTURED_ITEMS_TOOL.input_schema as unknown as Anthropic.Messages.Tool.InputSchema,
   };
   return [tool];
 }

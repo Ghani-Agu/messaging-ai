@@ -235,7 +235,14 @@ export type StructureItemsArgs = {
 export type StructureItemsResult = {
   toolArgs: StructureItemsToolArgs;
   modelId: string;
-  usage: { inputTokens: number; outputTokens: number } | null;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+  } | null;
+  /** Same retries-used contract as SendReplyResult. Stub returns 0. */
+  retriesUsed: number;
 };
 
 export interface ClaudeClient {
@@ -375,6 +382,7 @@ export class StubClaudeClient implements ClaudeClient {
       toolArgs: { items: drafts, notes: "stub: pattern-matched against keywords" },
       modelId: "stub",
       usage: null,
+      retriesUsed: 0,
     };
   }
 }
