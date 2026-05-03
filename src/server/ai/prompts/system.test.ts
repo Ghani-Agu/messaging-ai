@@ -17,7 +17,11 @@ import {
 const enc = new Tiktoken(cl100kBase);
 const tokens = (s: string) => enc.encode(s).length;
 
-const BLOCK_A_BUDGET = 800;
+// P4r-7 bumped 800 → 1150 to make room for explicit Algerian Darija
+// vocabulary coaching (the original 1100 estimate ran ~19 tokens short
+// after a tightening pass; the substantive content stays). See the
+// system.ts comment for the rationale on preserving the Darija block.
+const BLOCK_A_BUDGET = 1150;
 
 describe("Block A — platform rules", () => {
   it("stays under the token budget", () => {
@@ -29,12 +33,19 @@ describe("Block A — platform rules", () => {
     expect(BLOCK_A_TEXT).toMatch(/GROUNDING/);
     expect(BLOCK_A_TEXT).toMatch(/citations_used/);
     // Mirror rule must be there verbatim — it's the Gate-1 §4 fix.
-    expect(BLOCK_A_TEXT).toMatch(/Mirror the customer's register/);
+    expect(BLOCK_A_TEXT).toMatch(/Mirror the customer's language/);
     expect(BLOCK_A_TEXT).toMatch(/Do NOT introduce religious/);
     // Darija script-mirroring rule with both scripts shown.
     expect(BLOCK_A_TEXT).toMatch(/Arabizi/);
     expect(BLOCK_A_TEXT).toMatch(/wach 3andkom/);
-    expect(BLOCK_A_TEXT).toMatch(/واش عندكم/);
+    expect(BLOCK_A_TEXT).toMatch(/واش/);
+    // P4r-7 — Algerian-specific Darija coaching is load-bearing.
+    expect(BLOCK_A_TEXT).toMatch(/ALGERIAN/);
+    expect(BLOCK_A_TEXT).toMatch(/NOT Moroccan/);
+    expect(BLOCK_A_TEXT).toMatch(/kifach/);
+    expect(BLOCK_A_TEXT).toMatch(/bessah/);
+    expect(BLOCK_A_TEXT).toMatch(/rani nakteb/);
+    expect(BLOCK_A_TEXT).toMatch(/default to Algerian/);
     // All five escalation enum values appear.
     for (const reason of [
       "EXPLICIT_REQUEST",

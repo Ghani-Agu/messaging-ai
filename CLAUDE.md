@@ -337,6 +337,32 @@ So **Anthropic's `claude-sonnet-4-6` alias does not support prompt caching**. Th
 
 The cache_control markers stay in the codebase (single Block-B breakpoint, simplified from the P4r-3 three-breakpoint design) — they're zero-cost no-ops on 4.6 and ready for whichever model lands caching. Decision pending: Sonnet 4.6 (best quality, no caching) vs Sonnet 4.5 (caching saves ~80–90% on cached portions, possibly slightly lower quality). The probe scripts are reusable: `npm run probe:cache` after any model change.
 
+P4r-7 — **Phase 4 closing commit. Model pin switch + Algerian Darija coaching.**
+
+Model pin switched from `claude-sonnet-4-6` → `claude-sonnet-4-5-20250929` (dated snapshot). Decision rationale, empirical from the P4r-6 brain-eval bench against both models:
+- 4.6 alias does not support prompt caching (cache_create/cache_read both 0 even on prefixes well above the 1024-token Sonnet minimum). 4.5 caches normally — observed ~47% cost reduction on the 11-row eval ($0.107 → $0.057).
+- No observable quality differentiator between 4.5 and 4.6 on the 11-row bank. Both produced clean MSA/FR/EN replies; both produced non-Algerian Darija on rows 4–6 (the latter is a prompt-layer problem, not a model-layer one).
+- Dated snapshot pin (not the floating `claude-sonnet-4-5` alias) so silent rotation can't drift quality underneath us. Re-validate via `npm run probe:schema` after any future pin change.
+
+`BLOCK_A_TEXT` rewritten with **Algerian-specific Darija coaching**. The platform serves Algerian businesses, NOT generic Maghrebi or Moroccan. Without explicit Algerian vocabulary guidance, both Sonnet 4.5 and 4.6 default to French or MSA on Darija inputs (or worse, drift toward Moroccan vocabulary), which sounds foreign to Algerian customers. The new LANGUAGE HANDLING section pins:
+- Algerian markers in customer messages (Arabic-script + Arabizi).
+- Algerian vocabulary to USE: wach (not "ash"), kifach (not "shnu"), bessah (not "walakin"), barka (not "safi"), drahem (not "flus"), rani/raki (not "ana kayn").
+- Arabizi spelling: "ch" not "sh".
+- Negation pattern: ma...sh.
+- Present continuous: "rani nakteb" form (NOT Moroccan "kankteb").
+- Three concrete examples (Arabizi, Arabic-script, FR-Darija mix).
+- Default-to-Algerian fallback when ambiguous.
+
+**Future prompt edits MUST preserve the Algerian-specific coaching.** Never broaden to "Maghrebi Darija" or "generic Darija" — the platform's customers are Algerian. The `prompts/system.test.ts` assertions pin the load-bearing Algerian markers (`ALGERIAN`, `NOT Moroccan`, `kifach`, `bessah`, `rani nakteb`, `default to Algerian`) so accidental broadening fails CI.
+
+Block A token-budget assertion bumped 800 → 1150 (measured 1119 after coaching). The +380 vs P4r-6 are load-bearing for product quality with Algerian customers — worth the budget. See the system.ts header comment for the full rationale.
+
+P4r-7 brain-eval against the new pin + new Block A: **10/11 passed**. Rows 4 (Arabizi), 5 (Arabic-script Darija), 6 (FR-Darija code-switch) ALL pass with Algerian replies (e.g., row 5 produced "السلام! معليش، ما عنديش المعلومات على أوقات الخدمة متاعنا… واش تحب نديرلك هاذا؟" — solid Algerian Darija). The single failure (row 8 `refund-anger`) is an intermittent Supabase pooler error: `Transaction API error: Unable to start a transaction in the given time` — same infrastructure timeout that hit a different row on the original 4.5 run; not a brain quality issue. Caching observed firing on every row beyond the first (cache_read=1940 tokens consistent across rows).
+
+Validator footnote: the brain-eval Darija detector originally used `\b` word boundaries which don't match around Arabic letters. Expanded to substring matching with a broader Algerian marker vocabulary (`معليش`, `متاع`, `باش`, `نقدر`, `نديرلك`, `تحب`, `هاذا`, etc.) so excellent Darija replies aren't false-flagged.
+
+**Phase 4 acceptance — DONE.** runBrain hits real Sonnet 4.5 with caching firing; brain-eval passes 10/11 (the eleventh is infrastructure flake). Real customer-facing Darija quality validated.
+
 P4r-6 — **`scripts/brain-eval.ts` + `npm run brain:eval`.** Model-aware regression harness. 11-row query bank: AR (MSA) / FR / EN / Darija-Arabizi / Darija-Arabic-script / FR↔Darija code-switch / off-topic / refund-anger / priced-item lookup / tier-2 hours fact / Q&A near-verbatim. Idempotent fixture seeder embeds a Macbook Pro M3 KnowledgeItem + a "Vous livrez à Constantine ?" QnaPair + full operational facts on the acme tenant before the run. Per-row report: customer message → retrieval → tool result → franc-based language validation on the reply text (special handling for Darija — Arabizi via numeral-pattern detection, Arabic-script via dialect markers like واش/راكم/دير; franc can't distinguish Darija-MSA in Arabic script) → groundedness/confidence/escalation → token usage + USD cost → PASS/FAIL on shape (reply non-empty, language valid, citations indices in range, etc.). Cost-confirmation prompt at startup ("This will make N real API calls against {model} and cost approximately $X.XX. Continue? [y/N]"); skip with `--no-prompt`. JSON report always written to `eval/reports/{ts}-{model}.json`; optional Markdown via `--markdown`. Baseline-comparison mode diffs against the most recent prior report for the same model; flags language changes, escalation changes, citations-used delta, >20% reply-length change. `--model claude-sonnet-4-5` switches the pin for empirical 4.5-vs-4.6 comparison.
 
 P4r-6 also added the **`[brain-cache-warn]` log line** (small follow-up): when the cumulative system-block token count exceeds Anthropic's 1024-token minimum but the response shows `cache_create=0 AND cache_read=0`, emit `[brain-cache-warn] tenant=… model=… cacheable_tokens=… (caching SHOULD have fired but did not)`. Surfaces silent caching failures (the kind we found accidentally with Sonnet 4.6) in production logs without needing a probe run.

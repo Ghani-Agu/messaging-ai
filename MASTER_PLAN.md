@@ -98,7 +98,7 @@ Algerian and broader MENA SMBs: e-commerce stores, real estate agencies, clinics
 - **Zod** for runtime validation everywhere
 
 ### AI / ML
-- **Claude Sonnet 4.6** (primary brain, via Anthropic API; pinned in `src/server/ai/anthropic-config.ts`, env-overridable via `ANTHROPIC_MODEL`)
+- **Claude Sonnet 4.5** (primary brain, via Anthropic API; pinned to dated snapshot `claude-sonnet-4-5-20250929` in `src/server/ai/anthropic-config.ts`, env-overridable via `ANTHROPIC_MODEL`. Empirically chosen over Sonnet 4.6 in P4r-7 because 4.6 does not support prompt caching and the brain-eval showed no quality differentiator — see `CLAUDE.md` §7a.)
 - **GPT-4o-mini** (cheap path for cheap ops: intent classification, language detection, summarization, via OpenAI API)
 - **Voyage AI** for embeddings (multilingual, strong on Arabic) — falls back to OpenAI text-embedding-3-small if Voyage unavailable
 - **Firecrawl** for website crawling

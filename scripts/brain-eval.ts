@@ -339,8 +339,19 @@ const FRANC_TO_OURS: Record<string, SupportedReplyLanguage | "unknown"> = {
 function classifyDarijaScript(reply: string): "arabizi" | "arabic-script" | "neither" {
   const hasArabizi = /\d[a-z]+|[a-z]+\d/i.test(reply); // 3andkom, wa7ed, men9oul
   const hasArabicScript = /[؀-ۿ]/.test(reply);
-  const hasDarijaArabicMarker =
-    /\b(واش|راكم|راني|كاين|بزاف|كيفاش|مازال|دير)\b/.test(reply);
+  // Note: \b word boundaries don't work with Arabic (the Unicode chars
+  // aren't ASCII word characters), so we use substring matching.
+  // Algerian Darija markers — vocabulary distinct from MSA. Expanded
+  // P4r-7 after the first eval pass: the model produced excellent
+  // Darija replies that the original short marker list missed.
+  const ALGERIAN_DARIJA_MARKERS = [
+    "واش", "راكم", "راني", "كاين", "بزاف", "كيفاش", "مازال", "دير",
+    "معليش", "متاع", "باش", "نقدر", "نوصل", "نعطي", "نَدير", "ندير",
+    "تحب", "بصح", "برك", "خدام", "كاش", "هاذا", "هاذي",
+  ];
+  const hasDarijaArabicMarker = ALGERIAN_DARIJA_MARKERS.some((m) =>
+    reply.includes(m),
+  );
   if (hasArabicScript && hasDarijaArabicMarker) return "arabic-script";
   if (hasArabizi) return "arabizi";
   return "neither";

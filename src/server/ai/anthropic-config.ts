@@ -8,19 +8,26 @@ import "server-only";
  *   1. process.env.ANTHROPIC_MODEL if set → use as-is.
  *   2. else fall back to ANTHROPIC_MODEL_DEFAULT.
  *
- * The default is the alias `claude-sonnet-4-6`. Anthropic does not
- * currently expose a dated snapshot for the 4.6 family in the public
- * model list endpoint (`scripts/list-anthropic-models.ts` returns the
- * alias only, no `claude-sonnet-4-6-YYYYMMDD` form). When a dated
- * snapshot becomes listed, pin it via ANTHROPIC_MODEL in `.env.local`
- * (or update this default) and remove this comment.
+ * Pin (P4r-7): `claude-sonnet-4-5-20250929` — dated snapshot of Sonnet
+ * 4.5. Switched from `claude-sonnet-4-6` after the P4r-6 brain-eval
+ * empirically showed:
+ *   - Sonnet 4.6's alias does not support prompt caching (cache_create
+ *     and cache_read both 0 even on prefixes well above the 1024-token
+ *     minimum). Sonnet 4.5 caches normally — ~47% cost reduction
+ *     observed across the 11-row eval bank ($0.107 → $0.057).
+ *   - No observable quality differentiator between 4.5 and 4.6 on the
+ *     bank. Both produced clean MSA, FR, EN replies and both produced
+ *     non-Algerian Darija on rows 4–6 (the latter is solved at the
+ *     prompt layer in BLOCK_A_TEXT, not the model layer).
+ *   - Dated snapshot (not the `claude-sonnet-4-5` alias) so silent
+ *     rotation can't drift quality underneath us.
  *
  * The pricing table in `pricing.ts` strips trailing `-YYYYMMDD` snapshots
- * and falls back to the family alias, so a dated pin doesn't require a
- * pricing-table update unless rates change.
+ * and falls back to the family alias, so the dated pin doesn't require
+ * a pricing-table edit. (Sonnet 4.5 and 4.6 share rates as of P4r-7.)
  */
 
-export const ANTHROPIC_MODEL_DEFAULT = "claude-sonnet-4-6";
+export const ANTHROPIC_MODEL_DEFAULT = "claude-sonnet-4-5-20250929";
 
 export const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
