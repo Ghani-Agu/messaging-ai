@@ -88,16 +88,45 @@ export class AnthropicTimeoutError extends AnthropicError {
 }
 
 /**
- * Forced tool-use was requested but the response didn't include a tool_use
- * block. Per Gate-1 E, the orchestrator treats this as LOW_CONFIDENCE
- * escalation with `claudeReason = "MISSING_METADATA"`. Per the tool-use
- * refusals decision, end_turn-without-tool-use is also rerouted to
- * OUTSIDE_SCOPE (`claudeReason = "TOOL_REFUSAL"`) — that variant lives in
- * AnthropicToolRefusalError below.
+ * P4r-3: Claude emitted natural-content reply text but the forced
+ * send_reply_metadata tool_use block was missing. The reply is usable
+ * (we surface it to the customer), but we have no self-reported
+ * groundedness / citations / escalation signal — orchestrator forces
+ * escalation = LOW_CONFIDENCE with claudeReason = "MISSING_METADATA".
+ *
+ * Carries reply text + usage so the orchestrator can persist the partial
+ * response and emit [brain-cost] for the call that actually happened.
  */
 export class AnthropicMissingMetadataError extends AnthropicError {
-  constructor(message = "Anthropic response did not include the expected tool_use block") {
-    super(message, { retryable: false });
+  readonly replyText: string;
+  readonly modelId: string;
+  readonly usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+  } | null;
+  constructor(args: {
+    replyText: string;
+    modelId: string;
+    usage:
+      | {
+          inputTokens: number;
+          outputTokens: number;
+          cacheCreationInputTokens?: number;
+          cacheReadInputTokens?: number;
+        }
+      | null;
+    message?: string;
+  }) {
+    super(
+      args.message ??
+        "Anthropic response had reply text but missing send_reply_metadata tool_use block",
+      { retryable: false },
+    );
+    this.replyText = args.replyText;
+    this.modelId = args.modelId;
+    this.usage = args.usage;
   }
 }
 

@@ -343,10 +343,14 @@ import {
 } from "./claude-client";
 import {
   AnthropicConversationBudgetExhaustedError,
+  AnthropicMissingMetadataError,
   AnthropicServerError,
   AnthropicToolRefusalError,
 } from "./errors";
-import { __resetConversationRetryBudgetForTests } from "./orchestrator";
+import {
+  __resetBrainCacheLogForTests,
+  __resetConversationRetryBudgetForTests,
+} from "./orchestrator";
 
 class ScriptableClient implements ClaudeClient {
   // Each call shifts off the next response. Throws if scripts exhaust.
@@ -354,8 +358,8 @@ class ScriptableClient implements ClaudeClient {
 
   pushSuccess(overrides?: Partial<SendReplyResult>): void {
     this.scripts.push(async () => ({
+      reply: "real reply",
       toolArgs: {
-        reply: "real reply",
         language: "en",
         groundedness: 0.9,
         citations_used: [1, 2],
@@ -636,6 +640,201 @@ describe("runBrain — P4r-2 cost log", () => {
       typeof c[0] === "string" && c[0].startsWith("[brain-cost]"),
     );
     expect(matched).toBeUndefined();
+    logSpy.mockRestore();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P4r-3 — schema split, MISSING_METADATA fallback, log channel split,
+// [brain-cache] invalidation observability
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("runBrain — P4r-3 MISSING_METADATA fallback", () => {
+  beforeEach(() => {
+    __resetConversationRetryBudgetForTests();
+  });
+
+  it("synthesizes LOW_CONFIDENCE + MISSING_METADATA when reply text arrives but tool_use missing", async () => {
+    const client = new ScriptableClient();
+    client.pushReject(
+      new AnthropicMissingMetadataError({
+        replyText: "Partial reply text from Claude.",
+        modelId: "claude-sonnet-4-6",
+        usage: { inputTokens: 1000, outputTokens: 30 },
+      }),
+    );
+    __setClaudeClientForTests(client);
+
+    const r = await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-mm",
+      message: "Quels sont vos horaires?",
+    });
+    expect(r.reply).toBe("Partial reply text from Claude.");
+    expect(r.escalation).toBe("LOW_CONFIDENCE");
+    expect(r.aiMetadata.claudeReason).toBe("MISSING_METADATA");
+    expect(r.aiMetadata.modelId).toBe("claude-sonnet-4-6");
+    // Synthesized defaults — confidence 0, no citations.
+    expect(r.confidence).toBe(0);
+    expect(r.citationsUsed).toEqual([]);
+    // Language inferred from customer message (FR phrasing).
+    expect(r.language).toBe("fr");
+    // Usage carried through from the partial response.
+    expect(r.aiMetadata.usage?.inputTokens).toBe(1000);
+  });
+
+  it("emits [brain-cost] for MISSING_METADATA — the call did consume tokens", async () => {
+    const client = new ScriptableClient();
+    client.pushReject(
+      new AnthropicMissingMetadataError({
+        replyText: "partial",
+        modelId: "claude-sonnet-4-6",
+        usage: {
+          inputTokens: 800,
+          outputTokens: 25,
+          cacheCreationInputTokens: 600,
+          cacheReadInputTokens: 0,
+        },
+      }),
+    );
+    __setClaudeClientForTests(client);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-mm-cost",
+      message: "hi",
+    });
+    const cost = logSpy.mock.calls.find((c) =>
+      typeof c[0] === "string" && c[0].startsWith("[brain-cost]"),
+    );
+    expect(cost).toBeDefined();
+    expect(cost![0]).toContain("input=800");
+    expect(cost![0]).toContain("cache_create=600");
+    logSpy.mockRestore();
+  });
+});
+
+describe("runBrain — P4r-3 log channel split", () => {
+  beforeEach(() => {
+    __resetConversationRetryBudgetForTests();
+  });
+
+  it("AnthropicToolRefusalError emits [brain-refusal] (NOT [brain-error])", async () => {
+    const client = new ScriptableClient();
+    client.pushReject(new AnthropicToolRefusalError());
+    __setClaudeClientForTests(client);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-refusal",
+      message: "What's your refund policy in extreme detail with legal references?",
+    });
+    const refusalLine = logSpy.mock.calls.find((c) =>
+      typeof c[0] === "string" && c[0].startsWith("[brain-refusal]"),
+    );
+    expect(refusalLine).toBeDefined();
+    expect(refusalLine![0]).toContain("tenant=tenant-1");
+    expect(refusalLine![0]).toContain("conversation=conv-refusal");
+    expect(refusalLine![0]).toContain("type=AnthropicToolRefusalError");
+    // Customer message is included for refusal-pattern investigation.
+    expect(refusalLine![0]).toContain("customer_message=");
+    expect(refusalLine![0]).toContain("refund policy");
+
+    // Refusals do NOT also fire [brain-error] — they are distinct channels.
+    const errorLine = logSpy.mock.calls.find((c) =>
+      typeof c[0] === "string" && c[0].startsWith("[brain-error]"),
+    );
+    expect(errorLine).toBeUndefined();
+    logSpy.mockRestore();
+  });
+
+  it("AnthropicMissingMetadataError emits [brain-error] (treated as outage-side signal)", async () => {
+    const client = new ScriptableClient();
+    client.pushReject(
+      new AnthropicMissingMetadataError({
+        replyText: "partial",
+        modelId: "claude-sonnet-4-6",
+        usage: { inputTokens: 100, outputTokens: 5 },
+      }),
+    );
+    __setClaudeClientForTests(client);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runBrain({ tenantId: "tenant-1", message: "hi" });
+    const errorLine = logSpy.mock.calls.find((c) =>
+      typeof c[0] === "string" && c[0].startsWith("[brain-error]"),
+    );
+    expect(errorLine).toBeDefined();
+    expect(errorLine![0]).toContain("type=AnthropicMissingMetadataError");
+    logSpy.mockRestore();
+  });
+
+  it("[brain-refusal] truncates customer_message at 200 chars", async () => {
+    const client = new ScriptableClient();
+    client.pushReject(new AnthropicToolRefusalError());
+    __setClaudeClientForTests(client);
+    const longMessage = "x".repeat(500);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runBrain({ tenantId: "tenant-1", message: longMessage });
+    const refusalLine = logSpy.mock.calls.find((c) =>
+      typeof c[0] === "string" && c[0].startsWith("[brain-refusal]"),
+    );
+    // Truncation marker present.
+    expect(refusalLine![0]).toContain("…");
+    // Truncated text is exactly 200 chars + ellipsis.
+    expect(refusalLine![0]).toMatch(/customer_message="x{200}…"/);
+    logSpy.mockRestore();
+  });
+});
+
+describe("runBrain — P4r-3 [brain-cache] cache-invalidation observability", () => {
+  beforeEach(() => {
+    __resetConversationRetryBudgetForTests();
+    __resetBrainCacheLogForTests();
+  });
+
+  it("emits [brain-cache] block-a once per process", async () => {
+    const client = new ScriptableClient();
+    client.pushSuccess();
+    client.pushSuccess();
+    __setClaudeClientForTests(client);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runBrain({ tenantId: "tenant-1", message: "first" });
+    await runBrain({ tenantId: "tenant-2", message: "second (different tenant)" });
+
+    const blockALines = logSpy.mock.calls.filter((c) =>
+      typeof c[0] === "string" && c[0].startsWith("[brain-cache] block-a"),
+    );
+    // Logged once across both tenants — process-wide.
+    expect(blockALines).toHaveLength(1);
+    expect(blockALines[0]![0]).toMatch(/sha=[0-9a-f]{12}/);
+    expect(blockALines[0]![0]).toMatch(/tokens=\d+/);
+    logSpy.mockRestore();
+  });
+
+  it("emits [brain-cache] block-b once per tenant; re-logs when SHA changes", async () => {
+    const client = new ScriptableClient();
+    client.pushSuccess();
+    client.pushSuccess();
+    client.pushSuccess();
+    __setClaudeClientForTests(client);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    // Tenant 1: first call.
+    await runBrain({ tenantId: "tenant-1", message: "hi" });
+    // Same tenant, same Block B → no new log.
+    await runBrain({ tenantId: "tenant-1", message: "hi again" });
+    // Different tenant: new log line.
+    await runBrain({ tenantId: "tenant-2", message: "different tenant" });
+
+    const blockBLines = logSpy.mock.calls.filter((c) =>
+      typeof c[0] === "string" && c[0].startsWith("[brain-cache] block-b"),
+    );
+    expect(blockBLines).toHaveLength(2);
+    expect(blockBLines[0]![0]).toContain("tenant=tenant-1");
+    expect(blockBLines[1]![0]).toContain("tenant=tenant-2");
     logSpy.mockRestore();
   });
 });

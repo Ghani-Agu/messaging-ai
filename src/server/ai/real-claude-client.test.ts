@@ -72,7 +72,12 @@ const SAMPLE_SEND_REPLY_ARGS = {
   maxTokens: 600,
 };
 
-function makeToolUseResponse(overrides?: {
+/**
+ * P4r-3 schema split: response contains a natural-content text block
+ * for the reply AND a separate tool_use block named send_reply_metadata
+ * for the structured metadata.
+ */
+function makeFullResponse(overrides?: {
   reply?: string;
   language?: "en" | "fr" | "ar" | "darija";
   groundedness?: number;
@@ -99,11 +104,14 @@ function makeToolUseResponse(overrides?: {
     stop_sequence: null,
     content: [
       {
+        type: "text" as const,
+        text: overrides?.reply ?? "Hello from the test.",
+      },
+      {
         type: "tool_use" as const,
         id: "toolu_x",
-        name: "send_reply",
+        name: "send_reply_metadata",
         input: {
-          reply: overrides?.reply ?? "Hello from the test.",
           language: overrides?.language ?? "en",
           groundedness: overrides?.groundedness ?? 0.85,
           citations_used: overrides?.citationsUsed ?? [1],
@@ -124,7 +132,7 @@ function makeToolUseResponse(overrides?: {
 }
 
 function makeRefusalResponse() {
-  // end_turn with no tool_use block — the refusal pattern.
+  // end_turn with NEITHER text content NOR tool_use — full refusal.
   return {
     id: "msg_x",
     type: "message",
@@ -132,8 +140,25 @@ function makeRefusalResponse() {
     model: "claude-sonnet-4-6",
     stop_reason: "end_turn",
     stop_sequence: null,
-    content: [{ type: "text" as const, text: "I cannot help with that." }],
-    usage: { input_tokens: 200, output_tokens: 12 },
+    content: [],
+    usage: { input_tokens: 200, output_tokens: 0 },
+  };
+}
+
+/**
+ * P4r-3: reply text present but the metadata tool didn't fire — partial
+ * response → AnthropicMissingMetadataError.
+ */
+function makeTextOnlyResponse(reply: string) {
+  return {
+    id: "msg_x",
+    type: "message",
+    role: "assistant",
+    model: "claude-sonnet-4-6",
+    stop_reason: "end_turn",
+    stop_sequence: null,
+    content: [{ type: "text" as const, text: reply }],
+    usage: { input_tokens: 200, output_tokens: 50 },
   };
 }
 
@@ -146,9 +171,9 @@ afterEach(() => {
 });
 
 describe("RealClaudeClient.sendReply — happy path", () => {
-  it("returns a SendReplyResult mapped from the tool_use block", async () => {
+  it("returns a SendReplyResult mapped from text content + tool_use block", async () => {
     mockCreate.mockResolvedValueOnce(
-      makeToolUseResponse({
+      makeFullResponse({
         reply: "We ship across Algeria in 2-3 days.",
         language: "en",
         groundedness: 0.9,
@@ -161,11 +186,14 @@ describe("RealClaudeClient.sendReply — happy path", () => {
     const r = await c.sendReply(SAMPLE_SEND_REPLY_ARGS);
 
     expect(r.modelId).toBe("claude-sonnet-4-6");
-    expect(r.toolArgs.reply).toBe("We ship across Algeria in 2-3 days.");
+    // Reply text is now top-level on SendReplyResult, not in toolArgs.
+    expect(r.reply).toBe("We ship across Algeria in 2-3 days.");
     expect(r.toolArgs.language).toBe("en");
     expect(r.toolArgs.groundedness).toBe(0.9);
     expect(r.toolArgs.citations_used).toEqual([1, 2]);
     expect(r.toolArgs.escalation_recommended).toBe(false);
+    // toolArgs no longer has a `reply` field.
+    expect((r.toolArgs as { reply?: unknown }).reply).toBeUndefined();
     expect(r.usage).toEqual({
       inputTokens: 1200,
       outputTokens: 80,
@@ -177,7 +205,7 @@ describe("RealClaudeClient.sendReply — happy path", () => {
 
   it("populates cache_creation/cache_read when present", async () => {
     mockCreate.mockResolvedValueOnce(
-      makeToolUseResponse({
+      makeFullResponse({
         cacheCreationInputTokens: 800,
         cacheReadInputTokens: 0,
       }),
@@ -188,22 +216,78 @@ describe("RealClaudeClient.sendReply — happy path", () => {
     expect(r.usage?.cacheReadInputTokens).toBe(0);
   });
 
-  it("forces tool_use with the send_reply tool", async () => {
-    mockCreate.mockResolvedValueOnce(makeToolUseResponse());
+  it("forces tool_use with the send_reply_metadata tool", async () => {
+    mockCreate.mockResolvedValueOnce(makeFullResponse());
     const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
     await c.sendReply(SAMPLE_SEND_REPLY_ARGS);
 
     expect(mockCreate).toHaveBeenCalledOnce();
     const callArg = mockCreate.mock.calls[0]![0]!;
-    expect(callArg.tool_choice).toEqual({ type: "tool", name: "send_reply" });
-    expect(callArg.tools[0].name).toBe("send_reply");
+    expect(callArg.tool_choice).toEqual({
+      type: "tool",
+      name: "send_reply_metadata",
+    });
+    expect(callArg.tools[0].name).toBe("send_reply_metadata");
     expect(callArg.temperature).toBe(0.6);
     expect(callArg.max_tokens).toBe(600);
-    // System blocks pass through as text-typed entries.
+    // P4r-3: tool_use schema no longer contains `reply` in required.
+    expect(callArg.tools[0].input_schema.required).not.toContain("reply");
+    expect(callArg.tools[0].input_schema.properties).not.toHaveProperty("reply");
+  });
+
+  it("threads cacheControl through to Anthropic's cache_control marker", async () => {
+    mockCreate.mockResolvedValueOnce(makeFullResponse());
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+    await c.sendReply({
+      system: [
+        { type: "text", text: "Block A", cacheControl: "ephemeral" },
+        { type: "text", text: "Block B", cacheControl: "ephemeral" },
+      ],
+      userMessage: "hi",
+      maxTokens: 600,
+    });
+    const callArg = mockCreate.mock.calls[0]![0]!;
     expect(callArg.system).toEqual([
-      { type: "text", text: "block A" },
-      { type: "text", text: "block B" },
+      { type: "text", text: "Block A", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "Block B", cache_control: { type: "ephemeral" } },
     ]);
+    // Tools array also marked.
+    expect(callArg.tools[0].cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("omits cache_control when cacheControl is unset", async () => {
+    mockCreate.mockResolvedValueOnce(makeFullResponse());
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+    await c.sendReply({
+      system: [{ type: "text", text: "uncached" }],
+      userMessage: "hi",
+      maxTokens: 600,
+    });
+    const callArg = mockCreate.mock.calls[0]![0]!;
+    expect(callArg.system[0]).toEqual({ type: "text", text: "uncached" });
+  });
+});
+
+describe("RealClaudeClient.sendReply — schema-split error states", () => {
+  it("text content present, tool_use missing → AnthropicMissingMetadataError", async () => {
+    mockCreate.mockResolvedValueOnce(
+      makeTextOnlyResponse("Reply text without metadata."),
+    );
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+    const err = await c.sendReply(SAMPLE_SEND_REPLY_ARGS).catch((e) => e);
+    const { AnthropicMissingMetadataError } = await import("./errors");
+    expect(err).toBeInstanceOf(AnthropicMissingMetadataError);
+    expect(err.replyText).toBe("Reply text without metadata.");
+    expect(err.modelId).toBe("claude-sonnet-4-6");
+    expect(err.usage?.inputTokens).toBe(200);
+    expect(err.retriesUsed).toBe(0);
+  });
+
+  it("does NOT retry on missing metadata", async () => {
+    mockCreate.mockResolvedValueOnce(makeTextOnlyResponse("partial"));
+    const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
+    await c.sendReply(SAMPLE_SEND_REPLY_ARGS).catch(() => undefined);
+    expect(mockCreate).toHaveBeenCalledOnce();
   });
 });
 
@@ -274,7 +358,7 @@ describe("RealClaudeClient.sendReply — error mapping (retry)", () => {
         headers: { "retry-after": "0.5" },
       }),
     );
-    mockCreate.mockResolvedValueOnce(makeToolUseResponse());
+    mockCreate.mockResolvedValueOnce(makeFullResponse());
     const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
     const promise = c.sendReply(SAMPLE_SEND_REPLY_ARGS);
     // Advance the retry-after delay (500ms).
@@ -320,7 +404,7 @@ describe("RealClaudeClient.sendReply — error mapping (retry)", () => {
     mockCreate.mockRejectedValueOnce(
       new APIError({ status: 503, message: "service unavailable" }),
     );
-    mockCreate.mockResolvedValueOnce(makeToolUseResponse());
+    mockCreate.mockResolvedValueOnce(makeFullResponse());
     const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
     const promise = c.sendReply(SAMPLE_SEND_REPLY_ARGS);
     await vi.advanceTimersByTimeAsync(600);
@@ -333,7 +417,7 @@ describe("RealClaudeClient.sendReply — error mapping (retry)", () => {
     const abortErr = new Error("AbortError: signal aborted");
     abortErr.name = "AbortError";
     mockCreate.mockRejectedValueOnce(abortErr);
-    mockCreate.mockResolvedValueOnce(makeToolUseResponse());
+    mockCreate.mockResolvedValueOnce(makeFullResponse());
     const c = new RealClaudeClient({ apiKey: "sk-ant-test" });
     const promise = c.sendReply(SAMPLE_SEND_REPLY_ARGS);
     await vi.advanceTimersByTimeAsync(1_500);

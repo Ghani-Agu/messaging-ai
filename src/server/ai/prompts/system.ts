@@ -18,12 +18,24 @@ import type {
  * per-request runtime block) lives on the user turn, not here.
  *
  * Block A target: ≤ 800 input tokens (asserted by the unit test).
- * Block A measured: 594 tokens at design time (cl100k_base ≈ Claude).
+ * Block A measured: 594 tokens (Phase 4 design); 794 tokens after the
+ * P4r-3 schema-split instructions (reply-as-content + send_reply_metadata
+ * tool). cl100k_base tokenizer ≈ Claude's actual tokenizer ±5–10%.
  *
  * Pure functions — no I/O, no globals, easy to unit-test.
  */
 
-export type SystemBlock = { type: "text"; text: string };
+export type SystemBlock = {
+  type: "text";
+  text: string;
+  /**
+   * Anthropic prompt-caching marker (P4r-3). When set to "ephemeral",
+   * RealClaudeClient passes `cache_control: { type: "ephemeral" }` on
+   * the corresponding SDK message block — giving us a 5-min TTL prefix
+   * cache. Block A and Block B both opt in by default. Stub ignores it.
+   */
+  cacheControl?: "ephemeral";
+};
 
 /**
  * Block A — platform rules. Static across every tenant. The single
@@ -74,10 +86,14 @@ ESCALATION — set escalation_recommended: true when ANY hold, and pick the sing
 The orchestrator may override post-hoc with LOW_CONFIDENCE based on a deterministic groundedness-derived score.
 
 OUTPUT
-- You MUST respond by calling the send_reply tool. No free text.`;
+- Write your reply as natural response content — that text is what the customer sees.
+- Then call send_reply_metadata with: language, groundedness, citations_used, escalation_recommended, escalation_reason.
+- The tool carries metadata only; do not include reply text in its args.`;
 
 export function buildBlockA(): SystemBlock {
-  return { type: "text", text: BLOCK_A_TEXT };
+  // cacheControl: "ephemeral" → process-wide cache prefix (every tenant's
+  // first call seeds it; all later calls hit it). 5-min TTL. P4r-3.
+  return { type: "text", text: BLOCK_A_TEXT, cacheControl: "ephemeral" };
 }
 
 /**
@@ -157,7 +173,14 @@ export function buildBlockB(args: {
       lines.push(`Customer: ${ex.customer}`, `You:      ${ex.reply}`, "");
     }
   }
-  return { type: "text", text: lines.join("\n").trimEnd() };
+  // cacheControl: "ephemeral" → per-tenant cache prefix (Block A + Block B
+  // together). Hits across every conversation in the same tenant within
+  // the 5-min TTL. Invalidates on voice-profile / tier-1-fact edits.
+  return {
+    type: "text",
+    text: lines.join("\n").trimEnd(),
+    cacheControl: "ephemeral",
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -381,7 +404,9 @@ export function buildBlockC(args: {
   sections.push("NEW CUSTOMER MESSAGE");
   sections.push(message);
   sections.push("");
-  sections.push("Reply now via send_reply.");
+  sections.push(
+    "Reply now: write the reply text as natural content, then call send_reply_metadata.",
+  );
 
   return sections.join("\n");
 }

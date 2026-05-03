@@ -12,7 +12,8 @@ import {
   resolveModelId,
 } from "./anthropic-config";
 import {
-  SEND_REPLY_TOOL,
+  SEND_REPLY_METADATA_TOOL,
+  StubClaudeClient,
   type ClaudeClient,
   type SendReplyArgs,
   type SendReplyResult,
@@ -24,6 +25,7 @@ import {
   AnthropicAuthError,
   AnthropicBadRequestError,
   AnthropicError,
+  AnthropicMissingMetadataError,
   AnthropicRateLimitError,
   AnthropicServerError,
   AnthropicTimeoutError,
@@ -91,9 +93,31 @@ export class RealClaudeClient implements ClaudeClient {
    * Single attempt. Maps SDK errors to our typed errors so the retry
    * dispatcher can branch off `instanceof AnthropicError` without
    * cracking SDK internals.
+   *
+   * P4r-3 schema split: parses BOTH the natural-content reply text and
+   * the forced send_reply_metadata tool_use block. Three error states:
+   *   - no text + no tool        → AnthropicToolRefusalError (refusal)
+   *   - text but no tool         → AnthropicMissingMetadataError (partial
+   *                                response, reply usable, metadata absent)
+   *   - tool but no text         → AnthropicToolRefusalError (treated as
+   *                                refusal — tool without content is
+   *                                a degenerate state we don't trust)
+   *   - text + tool              → happy path, return SendReplyResult
    */
   private async sendReplyOnce(args: SendReplyArgs): Promise<SendReplyResult> {
     const systemBlocks = mapSystemBlocks(args.system);
+    const tools: Anthropic.Tool[] = [
+      // cache_control on the tool array creates a cache breakpoint at
+      // the end of `tools[]` — Anthropic caches the prefix from the
+      // start of the request up to here. With the breakpoint here, the
+      // tool array (identical across all calls) is the first cached
+      // segment, then Block A, then Block B (each with its own marker
+      // in mapSystemBlocks below).
+      {
+        ...(SEND_REPLY_METADATA_TOOL as unknown as Anthropic.Tool),
+        cache_control: { type: "ephemeral" },
+      },
+    ];
     let response: Anthropic.Messages.Message;
     try {
       response = await this.client.messages.create(
@@ -102,8 +126,8 @@ export class RealClaudeClient implements ClaudeClient {
           max_tokens: args.maxTokens,
           temperature: SEND_REPLY_TEMPERATURE,
           system: systemBlocks,
-          tools: [SEND_REPLY_TOOL as unknown as Anthropic.Tool],
-          tool_choice: { type: "tool", name: SEND_REPLY_TOOL.name },
+          tools,
+          tool_choice: { type: "tool", name: SEND_REPLY_METADATA_TOOL.name },
           messages: [{ role: "user", content: args.userMessage }],
         },
         { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
@@ -114,36 +138,63 @@ export class RealClaudeClient implements ClaudeClient {
 
     const toolBlock = response.content.find(
       (b): b is Anthropic.Messages.ToolUseBlock =>
-        b.type === "tool_use" && b.name === SEND_REPLY_TOOL.name,
+        b.type === "tool_use" && b.name === SEND_REPLY_METADATA_TOOL.name,
     );
+    const replyText = response.content
+      .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
 
-    // end_turn with no tool_use block → safety / refusal path.
+    const usage = response.usage;
+    const mappedUsage = {
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      cacheCreationInputTokens: usage.cache_creation_input_tokens ?? undefined,
+      cacheReadInputTokens: usage.cache_read_input_tokens ?? undefined,
+    };
+
+    if (!toolBlock && !replyText) {
+      // Neither content nor tool_use — Claude refused entirely.
+      throw new AnthropicToolRefusalError();
+    }
     if (!toolBlock) {
+      // Reply text is present but the forced metadata tool didn't fire.
+      // Surface the partial response so the orchestrator can persist it
+      // and synthesize MISSING_METADATA escalation.
+      throw new AnthropicMissingMetadataError({
+        replyText,
+        modelId: response.model,
+        usage: mappedUsage,
+      });
+    }
+    if (!replyText) {
+      // Tool fired but no content — degenerate state. Treat as refusal.
       throw new AnthropicToolRefusalError();
     }
 
     const toolArgs = toolBlock.input as SendReplyToolArgs;
-    const usage = response.usage;
     return {
+      reply: replyText,
       toolArgs,
       modelId: response.model,
-      usage: {
-        inputTokens: usage.input_tokens,
-        outputTokens: usage.output_tokens,
-        cacheCreationInputTokens: usage.cache_creation_input_tokens ?? undefined,
-        cacheReadInputTokens: usage.cache_read_input_tokens ?? undefined,
-      },
+      usage: mappedUsage,
       // Filled in by withRetry on its way out.
       retriesUsed: 0,
     };
   }
 
-  // structureItemsFromText lands in P4r-5. Defining the slot here so the
-  // interface stays explicit; throws until the implementation lands.
-  async structureItemsFromText(_args: StructureItemsArgs): Promise<StructureItemsResult> {
-    throw new Error(
-      "RealClaudeClient.structureItemsFromText: not implemented yet (lands in P4r-5)",
-    );
+  /**
+   * P4r-3 → P4r-5 placeholder. Real smart-import wires the SDK call with
+   * SEND_STRUCTURED_ITEMS_TOOL at temperature 0.1 in P4r-5; until then,
+   * delegate to a private StubClaudeClient instance so the operator's
+   * smart-import preview UI keeps working when ANTHROPIC_API_KEY is set.
+   * Remove this delegation and replace with the actual SDK call in P4r-5.
+   */
+  private readonly p4r5SmartImportPlaceholder = new StubClaudeClient();
+
+  async structureItemsFromText(args: StructureItemsArgs): Promise<StructureItemsResult> {
+    return this.p4r5SmartImportPlaceholder.structureItemsFromText!(args);
   }
 
   /**
@@ -201,9 +252,18 @@ export class RealClaudeClient implements ClaudeClient {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function mapSystemBlocks(blocks: SendReplyArgs["system"]): SystemBlockSdk[] {
-  // Block A/B currently land here as plain text blocks. cache_control
-  // markers wire in P4r-3.
-  return blocks.map((b) => ({ type: "text" as const, text: b.text }));
+  // P4r-3: pass cacheControl through as Anthropic's cache_control marker.
+  // Each marker creates a separate prefix-cache breakpoint. With markers
+  // on tools[] (set above), Block A, and Block B, we get:
+  //   - cross-tenant hit on (tools + Block A) prefix
+  //   - same-tenant hit on (tools + Block A + Block B) prefix
+  return blocks.map((b) => ({
+    type: "text" as const,
+    text: b.text,
+    ...(b.cacheControl
+      ? { cache_control: { type: "ephemeral" as const } }
+      : {}),
+  }));
 }
 
 /**

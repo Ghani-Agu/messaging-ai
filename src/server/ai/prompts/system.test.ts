@@ -45,8 +45,10 @@ describe("Block A — platform rules", () => {
     ]) {
       expect(BLOCK_A_TEXT).toContain(reason);
     }
-    // Tool-call output contract.
-    expect(BLOCK_A_TEXT).toMatch(/send_reply tool/);
+    // Tool-call output contract (P4r-3: split into reply-as-content +
+    // send_reply_metadata tool — Gate-1 E option a).
+    expect(BLOCK_A_TEXT).toMatch(/send_reply_metadata/);
+    expect(BLOCK_A_TEXT).toMatch(/natural response content/);
   });
 
   it("does NOT contain rules that were removed in Gate 1", () => {
@@ -187,7 +189,7 @@ describe("buildBlockA / buildBlockB / buildBlockC", () => {
     expect(c).toContain("[customer] Hello");
     expect(c).toContain("[you]      Hi!");
     expect(c).toContain("NEW CUSTOMER MESSAGE\nWhat are your shipping costs?");
-    expect(c).toMatch(/Reply now via send_reply\.$/);
+    expect(c).toMatch(/Reply now:.*send_reply_metadata\.$/);
   });
 
   it("buildBlockC renders structured-item citations with the items kind tag", () => {

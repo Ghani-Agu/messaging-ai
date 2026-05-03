@@ -34,11 +34,17 @@ export type EscalationReasonEnum =
   | "PAYMENT_DISPUTE";
 
 /**
- * The shape Claude must return via the forced `send_reply` tool call.
+ * Metadata Claude returns alongside the natural-content reply. The
+ * structured fields here drive confidence/escalation/citation analytics.
+ *
+ * P4r-3 schema restructure (Gate-1 E option a): the reply text used to
+ * live INSIDE this tool's args. It now lives as natural content on the
+ * message, streamable token-by-token in P4r-4. The tool carries only
+ * metadata about the reply.
+ *
  * Mirrors exactly the JSON Schema we send in `tools[]`.
  */
 export type SendReplyToolArgs = {
-  reply: string;
   language: SupportedReplyLanguage;
   /**
    * Self-reported support level: 1.0 if every claim in the reply is
@@ -56,22 +62,24 @@ export type SendReplyToolArgs = {
 /**
  * The JSON Schema we ship as `tools[0].input_schema`. Exported so the
  * real wrapper can pass it without redefining the shape.
+ *
+ * P4r-3 contract change: renamed from `send_reply` to
+ * `send_reply_metadata`. The reply text is no longer in tool args —
+ * it's expected as natural-content text blocks alongside this tool_use.
  */
-export const SEND_REPLY_TOOL = {
-  name: "send_reply",
+export const SEND_REPLY_METADATA_TOOL = {
+  name: "send_reply_metadata",
   description:
-    "Send a reply to the customer. You must call this — never output free text.",
+    "Provide structured metadata about the reply you wrote as natural content. Call this AFTER (or alongside) the natural-content reply text. Do NOT include the reply text in these args — only metadata about it.",
   input_schema: {
     type: "object",
     required: [
-      "reply",
       "language",
       "groundedness",
       "citations_used",
       "escalation_recommended",
     ],
     properties: {
-      reply: { type: "string" },
       language: { type: "string", enum: ["ar", "fr", "en", "darija"] },
       groundedness: { type: "number", minimum: 0, maximum: 1 },
       citations_used: { type: "array", items: { type: "integer", minimum: 1 } },
@@ -168,7 +176,14 @@ export const SEND_STRUCTURED_ITEMS_TOOL = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type SendReplyArgs = {
-  /** Multi-block system prompt. Future: mark Block A/B with cache_control. */
+  /**
+   * Multi-block system prompt. Each block can opt into Anthropic prompt
+   * caching by setting cacheControl: "ephemeral" — the real client
+   * passes that through as cache_control on the SDK call. Stub ignores
+   * it. Convention: Block A and Block B both carry cacheControl =
+   * "ephemeral" so we get a process-wide cache hit on the platform-
+   * rules prefix and a per-tenant hit on the identity-and-voice prefix.
+   */
   system: SystemBlock[];
   /** Single user turn carrying citations + history + new message. */
   userMessage: string;
@@ -177,13 +192,20 @@ export type SendReplyArgs = {
 };
 
 export type SendReplyResult = {
+  /**
+   * The customer-facing reply text. P4r-3: the reply is now natural
+   * content on the message (streamable in P4r-4), separate from the
+   * metadata tool args. RealClaudeClient stitches text content blocks
+   * into this string; StubClaudeClient returns a canned string.
+   */
+  reply: string;
   toolArgs: SendReplyToolArgs;
   /** Diagnostic — populated by the real client. Stub returns "stub". */
   modelId: string;
   /**
    * Diagnostic — null from the stub. The real client populates the
-   * Anthropic usage breakdown. cacheCreationInputTokens / cacheReadInputTokens
-   * become populated once prompt caching wires up in P4r-3.
+   * Anthropic usage breakdown. Cache-token counts are populated when
+   * prompt caching is active (P4r-3+).
    */
   usage: {
     inputTokens: number;
@@ -270,8 +292,12 @@ function extractCustomerMessage(userMessage: string): string {
   const idx = userMessage.indexOf(marker);
   if (idx === -1) return userMessage;
   const after = userMessage.slice(idx + marker.length);
-  // The block ends with a literal "\n\nReply now via send_reply." — strip it.
-  return after.replace(/\n+Reply now via send_reply\.\s*$/, "").trim();
+  // P4r-3: Block C ends with "Reply now: write the reply text as natural
+  // content, then call send_reply_metadata." Strip trailers matching either
+  // shape so the stub keeps working with old or new BLOCK_C wording.
+  return after
+    .replace(/\n+Reply now[^]*?send_reply(?:_metadata)?\.?\s*$/, "")
+    .trim();
 }
 
 function countCitations(userMessage: string): number {
@@ -286,11 +312,12 @@ export class StubClaudeClient implements ClaudeClient {
     const language = detectLanguage(customerMessage);
     const numCitations = countCitations(args.userMessage);
 
+    let reply: string;
     let toolArgs: SendReplyToolArgs;
 
     if (REFUND_RE.test(customerMessage)) {
+      reply = stubReplyRefund(language);
       toolArgs = {
-        reply: stubReplyRefund(language),
         language,
         groundedness: 0.2,
         citations_used: [],
@@ -298,8 +325,8 @@ export class StubClaudeClient implements ClaudeClient {
         escalation_reason: "PAYMENT_DISPUTE",
       };
     } else if (HUMAN_RE.test(customerMessage)) {
+      reply = stubReplyHuman(language);
       toolArgs = {
-        reply: stubReplyHuman(language),
         language,
         groundedness: 0.1,
         citations_used: [],
@@ -307,8 +334,8 @@ export class StubClaudeClient implements ClaudeClient {
         escalation_reason: "EXPLICIT_REQUEST",
       };
     } else if (numCitations === 0) {
+      reply = stubReplyOffTopic(language);
       toolArgs = {
-        reply: stubReplyOffTopic(language),
         language,
         groundedness: 0.0,
         citations_used: [],
@@ -318,8 +345,8 @@ export class StubClaudeClient implements ClaudeClient {
     } else {
       // Happy path: pretend Claude grounded the answer in citations 1..min(N,2).
       const used = numCitations >= 2 ? [1, 2] : [1];
+      reply = stubReplyGrounded(language, used.length);
       toolArgs = {
-        reply: stubReplyGrounded(language, used.length),
         language,
         groundedness: 0.85,
         citations_used: used,
@@ -328,6 +355,7 @@ export class StubClaudeClient implements ClaudeClient {
     }
 
     return {
+      reply,
       toolArgs,
       modelId: "stub",
       usage: null,

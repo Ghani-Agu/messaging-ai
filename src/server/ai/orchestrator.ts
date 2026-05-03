@@ -31,17 +31,21 @@ import {
 } from "./confidence";
 import {
   getClaudeClient,
+  type SendReplyResult,
   type SendReplyToolArgs,
   type SupportedReplyLanguage,
 } from "./claude-client";
 import {
   AnthropicConversationBudgetExhaustedError,
   AnthropicError,
+  AnthropicMissingMetadataError,
   AnthropicToolRefusalError,
 } from "./errors";
 import { CONVERSATION_RETRY_CAP } from "./anthropic-config";
 import { computeCostUsd, formatUsd } from "./pricing";
 import { getToolRefusalFallback } from "./fallbacks";
+import { createHash } from "node:crypto";
+import { BLOCK_A_TEXT } from "./prompts/system";
 
 /**
  * AI brain orchestrator.
@@ -118,6 +122,52 @@ const conversationRetryBudget = new Map<string, number>();
 /** Test affordance: clear the conversation retry tracker between runs. */
 export function __resetConversationRetryBudgetForTests(): void {
   conversationRetryBudget.clear();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [brain-cache] cache-invalidation logging (P4r-3 Gate-1 B)
+//
+// Anthropic prompt caching is keyed on byte-level content. Any edit to
+// BLOCK_A_TEXT invalidates the platform-rules cache process-wide; any
+// per-tenant edit (voice profile, tier-1 facts) invalidates that
+// tenant's Block B cache. Both cost +25% input on the first call after
+// the change.
+//
+// We log a SHA-256 prefix per block on first occurrence so operators
+// can grep `[brain-cache]` and see when the prompt content rotated —
+// the proxy signal for cache-invalidation events.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BLOCK_A_SHA = sha12(BLOCK_A_TEXT);
+let blockACacheLogged = false;
+const blockBLastSHAByTenant = new Map<string, string>();
+
+function sha12(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 12);
+}
+
+function maybeLogBlockACache(): void {
+  if (blockACacheLogged) return;
+  blockACacheLogged = true;
+  console.log(
+    `[brain-cache] block-a sha=${BLOCK_A_SHA} tokens=${countTokens(BLOCK_A_TEXT)}`,
+  );
+}
+
+function maybeLogBlockBCache(tenantId: string, blockBText: string): void {
+  const sha = sha12(blockBText);
+  const last = blockBLastSHAByTenant.get(tenantId);
+  if (last === sha) return;
+  blockBLastSHAByTenant.set(tenantId, sha);
+  console.log(
+    `[brain-cache] block-b tenant=${tenantId} sha=${sha} tokens=${countTokens(blockBText)}`,
+  );
+}
+
+/** Test affordance: reset cache-log state between runs. */
+export function __resetBrainCacheLogForTests(): void {
+  blockACacheLogged = false;
+  blockBLastSHAByTenant.clear();
 }
 
 /**
@@ -438,6 +488,12 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
     }
   }
 
+  // [brain-cache] cache-invalidation observability (P4r-3 Gate-1 B).
+  // Logged once per process for Block A and once per tenant for Block B
+  // (re-logged when SHA changes — that's the invalidation signal).
+  maybeLogBlockACache();
+  maybeLogBlockBCache(tenantId, system[1]?.text ?? "");
+
   const client = getClaudeClient();
   let claudeResult;
   try {
@@ -458,10 +514,11 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
     // (Gate-1 E + 'other decisions') so the conversation continues
     // gracefully and the gap-logger picks up the OUTSIDE_SCOPE.
     if (err instanceof AnthropicToolRefusalError) {
-      logBrainError({
+      logBrainRefusal({
         tenantId,
         conversationId: convId,
         err,
+        customerMessage: trimmedMessage,
       });
       return {
         reply: getToolRefusalFallback(detectedLanguage),
@@ -477,6 +534,45 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
           claudeReason: "TOOL_REFUSAL",
           topChunkSimilarity,
           usage: null,
+        },
+      };
+    }
+
+    // P4r-3 schema-split: reply text arrived, metadata tool didn't.
+    // The reply is usable; we synthesize defaults for the metadata
+    // we don't have, force LOW_CONFIDENCE escalation, and tag
+    // claudeReason = MISSING_METADATA so the divergence is visible
+    // in analytics.
+    if (err instanceof AnthropicMissingMetadataError) {
+      logBrainError({
+        tenantId,
+        conversationId: convId,
+        err,
+      });
+      // [brain-cost] still fires — the call did happen, tokens were
+      // consumed. Log with the usage from the partial response.
+      if (err.usage) {
+        logBrainCost({
+          tenantId,
+          modelId: err.modelId,
+          usage: err.usage,
+          retriesUsed: err.retriesUsed,
+        });
+      }
+      return {
+        reply: err.replyText,
+        language: detectedLanguage,
+        citations: brainCitations,
+        citationsUsed: [],
+        groundedness: 0,
+        confidence: 0,
+        escalation: "LOW_CONFIDENCE",
+        aiMetadata: {
+          modelId: err.modelId,
+          claudeRecommendedEscalation: true,
+          claudeReason: "MISSING_METADATA",
+          topChunkSimilarity,
+          usage: err.usage,
         },
       };
     }
@@ -506,26 +602,14 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
 
   const tool: SendReplyToolArgs = claudeResult.toolArgs;
 
-  // [brain-cost] one-line structured log per Gate-1 K6. Only the real
-  // client populates `usage`; stub returns null and skips the log.
+  // [brain-cost] log on the happy path. Stub returns null and is skipped.
   if (claudeResult.usage) {
-    const u = claudeResult.usage;
-    let costUsd = 0;
-    try {
-      costUsd = computeCostUsd(claudeResult.modelId, u);
-    } catch {
-      // Unknown model — pricing table doesn't cover it. Log zero rather
-      // than crash the request; the [brain-cost] line is diagnostic, not
-      // load-bearing.
-      costUsd = 0;
-    }
-    console.log(
-      `[brain-cost] tenant=${tenantId} model=${claudeResult.modelId} ` +
-        `input=${u.inputTokens} output=${u.outputTokens} ` +
-        `cache_create=${u.cacheCreationInputTokens ?? 0} ` +
-        `cache_read=${u.cacheReadInputTokens ?? 0} ` +
-        `retries=${claudeResult.retriesUsed} cost=${formatUsd(costUsd)}`,
-    );
+    logBrainCost({
+      tenantId,
+      modelId: claudeResult.modelId,
+      usage: claudeResult.usage,
+      retriesUsed: claudeResult.retriesUsed,
+    });
   }
 
   const confidence = computeConfidence({
@@ -542,7 +626,7 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
   });
 
   return {
-    reply: tool.reply,
+    reply: claudeResult.reply,
     language: tool.language,
     citations: brainCitations,
     citationsUsed: tool.citations_used,
@@ -560,9 +644,37 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
 }
 
 /**
- * Structured one-liner for Anthropic-side failures (Gate-1 K8 addition).
- * Lets ops grep `[brain-error]` for outage windows without parsing stack
- * traces. Tenant + conversation + error type + retriesUsed + status.
+ * [brain-cost] structured one-liner. Extracted so both the happy path
+ * and the MISSING_METADATA fallback path can share the formatting.
+ */
+function logBrainCost(args: {
+  tenantId: string;
+  modelId: string;
+  usage: NonNullable<SendReplyResult["usage"]>;
+  retriesUsed: number;
+}): void {
+  const { tenantId, modelId, usage, retriesUsed } = args;
+  let costUsd = 0;
+  try {
+    costUsd = computeCostUsd(modelId, usage);
+  } catch {
+    // Unknown model in the pricing table — log zero rather than crash.
+    costUsd = 0;
+  }
+  console.log(
+    `[brain-cost] tenant=${tenantId} model=${modelId} ` +
+      `input=${usage.inputTokens} output=${usage.outputTokens} ` +
+      `cache_create=${usage.cacheCreationInputTokens ?? 0} ` +
+      `cache_read=${usage.cacheReadInputTokens ?? 0} ` +
+      `retries=${retriesUsed} cost=${formatUsd(costUsd)}`,
+  );
+}
+
+/**
+ * Structured one-liner for Anthropic-side failures (Gate-1 K8). Lets ops
+ * grep `[brain-error]` for outage windows without parsing stack traces.
+ * Outages and content/safety refusals have different remediation paths,
+ * so refusals get their own [brain-refusal] line (logBrainRefusal).
  */
 function logBrainError(args: {
   tenantId: string;
@@ -575,6 +687,34 @@ function logBrainError(args: {
   console.log(
     `[brain-error] tenant=${tenantId} conversation=${conversationId ?? "n/a"} ` +
       `type=${err.name} status=${status} retries=${retries} message=${JSON.stringify(err.message)}`,
+  );
+}
+
+/**
+ * P4r-3 split from [brain-error]: tool-refusal events (Claude returned
+ * end_turn without a tool_use block). These are content/safety signals,
+ * not infrastructure outages — different remediation paths, so they get
+ * their own log channel. Includes the customer message truncated to 200
+ * chars so operators can investigate refusal patterns without digging
+ * through full transcripts.
+ */
+const REFUSAL_MESSAGE_TRUNCATE_CHARS = 200;
+
+function logBrainRefusal(args: {
+  tenantId: string;
+  conversationId?: string;
+  err: AnthropicError;
+  customerMessage: string;
+}): void {
+  const { tenantId, conversationId, err, customerMessage } = args;
+  const truncated =
+    customerMessage.length > REFUSAL_MESSAGE_TRUNCATE_CHARS
+      ? customerMessage.slice(0, REFUSAL_MESSAGE_TRUNCATE_CHARS) + "…"
+      : customerMessage;
+  console.log(
+    `[brain-refusal] tenant=${tenantId} conversation=${conversationId ?? "n/a"} ` +
+      `type=${err.name} retries=${err.retriesUsed} ` +
+      `customer_message=${JSON.stringify(truncated)}`,
   );
 }
 
