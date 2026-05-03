@@ -65,3 +65,10 @@ docker-data/
 # StubWhatsAppClient (and future stub channel adapters) so dev can
 # inspect simulated outbound traffic without hitting a real provider.
 .stub-deliveries/
+
+# brain-eval reports — generated locally per run, used for baseline
+# comparison and historical inspection. Not committed: each developer
+# runs eval against their own seeded state, and the reports include
+# real reply text + tenant data. The eval script (scripts/brain-eval.ts)
+# IS committed.
+eval/reports/

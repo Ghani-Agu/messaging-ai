@@ -255,6 +255,16 @@ type CallContext = {
   brainCitations: BrainCitation[];
   topChunkSimilarity: number;
   args: SendReplyArgs;
+  /**
+   * Sum of tokens in system blocks A + B — i.e., the cacheable prefix.
+   * Used by the [brain-cache-warn] log line: when a model is sent a
+   * cache_control marker on a prefix above Anthropic's 1024-token
+   * minimum but the response shows cache_create=0 AND cache_read=0,
+   * caching was silently ignored (model-specific upstream constraint).
+   * Surfacing this in production logs makes the kind of finding we
+   * had with Sonnet 4.6 detectable rather than discovered by accident.
+   */
+  cacheableTokens: number;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -558,6 +568,7 @@ async function prepareCallContext(input: BrainInput): Promise<CallContext> {
     brainCitations,
     topChunkSimilarity,
     args: { system, userMessage, maxTokens: MAX_REPLY_TOKENS },
+    cacheableTokens: system.reduce((n, b) => n + countTokens(b.text), 0),
   };
 }
 
@@ -697,6 +708,12 @@ function finalizeBrainResult(
       usage: claudeResult.usage,
       retriesUsed: claudeResult.retriesUsed,
     });
+    maybeLogCacheWarn({
+      tenantId: ctx.tenantId,
+      modelId: claudeResult.modelId,
+      usage: claudeResult.usage,
+      cacheableTokens: ctx.cacheableTokens,
+    });
   }
 
   const tool = claudeResult.toolArgs;
@@ -754,6 +771,40 @@ async function* chunkReplyAsDeltas(
 // ─────────────────────────────────────────────────────────────────────────────
 // Structured logs
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Anthropic's per-segment cache minimum for Sonnet (and Opus). Below
+ * this size, cache_control markers are silently ignored. We use this
+ * threshold for the [brain-cache-warn] check.
+ */
+const ANTHROPIC_CACHE_MINIMUM_TOKENS = 1024;
+
+/**
+ * Detects "we asked for caching but got nothing" and emits a structured
+ * warn line. The P4r-5 cache-effectiveness probe found Sonnet 4.6
+ * silently ignores cache_control even on prefixes well above 1024
+ * tokens (model-specific upstream constraint). Surfacing this in
+ * production logs makes future similar findings detectable in the
+ * field rather than via probe runs.
+ */
+function maybeLogCacheWarn(args: {
+  tenantId: string;
+  modelId: string;
+  usage: NonNullable<SendReplyResult["usage"]>;
+  cacheableTokens: number;
+}): void {
+  const { tenantId, modelId, usage, cacheableTokens } = args;
+  if (cacheableTokens < ANTHROPIC_CACHE_MINIMUM_TOKENS) return;
+  const totalCacheTokens =
+    (usage.cacheCreationInputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0);
+  if (totalCacheTokens > 0) return;
+  console.log(
+    `[brain-cache-warn] tenant=${tenantId} model=${modelId} ` +
+      `cacheable_tokens=${cacheableTokens} ` +
+      `cache_create=0 cache_read=0 ` +
+      `(caching SHOULD have fired but did not — model may not support caching)`,
+  );
+}
 
 function logBrainCost(args: {
   tenantId: string;
