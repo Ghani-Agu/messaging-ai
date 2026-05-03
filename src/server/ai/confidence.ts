@@ -40,12 +40,32 @@ import "server-only";
 
 export const CONFIDENCE_THRESHOLD = 0.6;
 
+/**
+ * Final escalation reasons surfaced by the orchestrator. Five of these
+ * map 1:1 to the values Claude can choose via SEND_REPLY_TOOL's
+ * `escalation_reason` enum (see claude-client.ts EscalationReasonEnum).
+ *
+ * Two are *synthesized* by the orchestrator and never originate from
+ * Claude's tool call:
+ *   - LOW_CONFIDENCE   — confidence < CONFIDENCE_THRESHOLD; computed
+ *                        deterministically post-tool-call.
+ *   - TOOL_REFUSAL     — Claude returned end_turn without a tool_use
+ *                        block (P4r-2). Safety filter or other refusal.
+ *                        Orchestrator returns OUTSIDE_SCOPE escalation +
+ *                        TOOL_REFUSAL claudeReason + a deterministic
+ *                        per-language fallback reply.
+ *   - MISSING_METADATA — natural-content reply text arrived but the
+ *                        forced metadata tool didn't (P4r-3). Reply is
+ *                        usable but escalation defaults to LOW_CONFIDENCE.
+ */
 export type EscalationReason =
   | "LOW_CONFIDENCE"
   | "NEGATIVE_SENTIMENT"
   | "EXPLICIT_REQUEST"
   | "OUTSIDE_SCOPE"
-  | "PAYMENT_DISPUTE";
+  | "PAYMENT_DISPUTE"
+  | "TOOL_REFUSAL"
+  | "MISSING_METADATA";
 
 export type ConfidenceInput = {
   groundedness: number;

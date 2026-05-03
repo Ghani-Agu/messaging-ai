@@ -64,7 +64,12 @@ export type MessageAiMetadata = {
   claudeRecommendedEscalation: boolean;
   claudeReason: EscalationReason | null;
   topChunkSimilarity: number;
-  usage: { inputTokens: number; outputTokens: number } | null;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+  } | null;
   citations: BrainCitation[];
   citationsUsed: number[];
   deliveryStatus?: MessageDeliveryStatus;

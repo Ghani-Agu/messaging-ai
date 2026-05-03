@@ -330,3 +330,312 @@ describe("runBrain — Phase 8b operational facts (tier-1 in Block B)", () => {
     expect(blockBText).not.toContain("Primary language (operator-set)");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P4r-2 — RealClaudeClient integration
+// ─────────────────────────────────────────────────────────────────────────────
+
+import {
+  __setClaudeClientForTests,
+  type ClaudeClient,
+  type SendReplyArgs,
+  type SendReplyResult,
+} from "./claude-client";
+import {
+  AnthropicConversationBudgetExhaustedError,
+  AnthropicServerError,
+  AnthropicToolRefusalError,
+} from "./errors";
+import { __resetConversationRetryBudgetForTests } from "./orchestrator";
+
+class ScriptableClient implements ClaudeClient {
+  // Each call shifts off the next response. Throws if scripts exhaust.
+  private scripts: Array<() => Promise<SendReplyResult>> = [];
+
+  pushSuccess(overrides?: Partial<SendReplyResult>): void {
+    this.scripts.push(async () => ({
+      toolArgs: {
+        reply: "real reply",
+        language: "en",
+        groundedness: 0.9,
+        citations_used: [1, 2],
+        escalation_recommended: false,
+      },
+      modelId: "claude-sonnet-4-6",
+      usage: { inputTokens: 1000, outputTokens: 50 },
+      retriesUsed: 0,
+      ...overrides,
+    }));
+  }
+
+  pushReject(err: unknown): void {
+    this.scripts.push(async () => {
+      throw err;
+    });
+  }
+
+  async sendReply(_args: SendReplyArgs): Promise<SendReplyResult> {
+    const next = this.scripts.shift();
+    if (!next) throw new Error("ScriptableClient: no more scripts");
+    return next();
+  }
+}
+
+describe("runBrain — P4r-2 tool refusal fallback", () => {
+  beforeEach(() => {
+    __resetConversationRetryBudgetForTests();
+  });
+
+  it("synthesizes OUTSIDE_SCOPE + TOOL_REFUSAL with a per-language fallback", async () => {
+    const client = new ScriptableClient();
+    client.pushReject(new AnthropicToolRefusalError());
+    __setClaudeClientForTests(client);
+
+    const r = await runBrain({
+      tenantId: "tenant-1",
+      message: "Quels sont vos horaires?",
+    });
+
+    expect(r.escalation).toBe("OUTSIDE_SCOPE");
+    expect(r.aiMetadata.claudeReason).toBe("TOOL_REFUSAL");
+    expect(r.aiMetadata.modelId).toBe("anthropic:tool-refusal");
+    // French message → French fallback.
+    expect(r.language).toBe("fr");
+    expect(r.reply).toContain("Je ne peux pas");
+    expect(r.confidence).toBe(0);
+    expect(r.groundedness).toBe(0);
+  });
+
+  it("uses Darija fallback for Arabizi customer messages", async () => {
+    const client = new ScriptableClient();
+    client.pushReject(new AnthropicToolRefusalError());
+    __setClaudeClientForTests(client);
+
+    const r = await runBrain({
+      tenantId: "tenant-1",
+      message: "wach 3andkom des horaires?",
+    });
+    expect(r.language).toBe("darija");
+    expect(r.reply).toContain("Smahli");
+  });
+
+  it("does NOT throw — keeps the conversation flowing", async () => {
+    const client = new ScriptableClient();
+    client.pushReject(new AnthropicToolRefusalError());
+    __setClaudeClientForTests(client);
+
+    await expect(
+      runBrain({ tenantId: "tenant-1", message: "hello" }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe("runBrain — P4r-2 conversation retry budget", () => {
+  beforeEach(() => {
+    __resetConversationRetryBudgetForTests();
+  });
+
+  it("accumulates retriesUsed across turns", async () => {
+    const client = new ScriptableClient();
+    client.pushSuccess({ retriesUsed: 2 });
+    client.pushSuccess({ retriesUsed: 2 });
+    __setClaudeClientForTests(client);
+
+    await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-1",
+      message: "hi",
+    });
+    await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-1",
+      message: "hi again",
+    });
+    // Two turns × 2 retries = 4 cumulative; below cap of 5, so the next
+    // turn should still go through.
+    client.pushSuccess({ retriesUsed: 0 });
+    const r = await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-1",
+      message: "third turn",
+    });
+    expect(r.reply).toBe("real reply");
+  });
+
+  it("fails fast when the cumulative budget is exhausted", async () => {
+    const client = new ScriptableClient();
+    client.pushSuccess({ retriesUsed: 3 });
+    client.pushSuccess({ retriesUsed: 2 });
+    __setClaudeClientForTests(client);
+
+    // Two turns push cumulative to 5 — at the cap.
+    await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-2",
+      message: "first",
+    });
+    await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-2",
+      message: "second",
+    });
+    // Third turn should fail-fast without even calling the client.
+    await expect(
+      runBrain({
+        tenantId: "tenant-1",
+        conversationId: "conv-2",
+        message: "third (should fail fast)",
+      }),
+    ).rejects.toBeInstanceOf(AnthropicConversationBudgetExhaustedError);
+  });
+
+  it("clean turn (retriesUsed=0) resets the counter", async () => {
+    const client = new ScriptableClient();
+    client.pushSuccess({ retriesUsed: 4 });
+    client.pushSuccess({ retriesUsed: 0 }); // resets to 0
+    client.pushSuccess({ retriesUsed: 3 }); // now 3, not 7
+    __setClaudeClientForTests(client);
+
+    await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-3",
+      message: "first",
+    });
+    await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-3",
+      message: "second",
+    });
+    // Third turn would have failed without the reset (4 + 3 = 7 > 5),
+    // but the clean-turn reset means we're at 0 + 3 = 3 < 5.
+    const r = await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-3",
+      message: "third",
+    });
+    expect(r.reply).toBe("real reply");
+  });
+
+  it("budget is per-conversation — different conversationId starts fresh", async () => {
+    const client = new ScriptableClient();
+    client.pushSuccess({ retriesUsed: 5 }); // burns conv-A's budget
+    client.pushSuccess({ retriesUsed: 0 }); // conv-B is fine
+    __setClaudeClientForTests(client);
+
+    await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-A",
+      message: "burn",
+    });
+    const r = await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-B",
+      message: "fresh",
+    });
+    expect(r.reply).toBe("real reply");
+  });
+
+  it("undefined conversationId skips the budget check entirely", async () => {
+    const client = new ScriptableClient();
+    client.pushSuccess({ retriesUsed: 0 });
+    __setClaudeClientForTests(client);
+
+    // No conversationId — smart-import-style call. Always allowed.
+    const r = await runBrain({ tenantId: "tenant-1", message: "one-shot" });
+    expect(r.reply).toBe("real reply");
+  });
+
+  it("on failure, retriesUsed counts toward the cumulative budget", async () => {
+    const client = new ScriptableClient();
+    const err = new AnthropicServerError("boom", 500);
+    err.retriesUsed = 3;
+    client.pushReject(err);
+    __setClaudeClientForTests(client);
+
+    // First turn fails; retries from the client count toward budget.
+    await expect(
+      runBrain({
+        tenantId: "tenant-1",
+        conversationId: "conv-fail",
+        message: "fail me",
+      }),
+    ).rejects.toBe(err);
+
+    // Second turn would push cumulative > 5 with another 3 retries → fail fast.
+    const err2 = new AnthropicServerError("boom2", 500);
+    err2.retriesUsed = 3;
+    client.pushReject(err2);
+    // Cumulative is 3; still below cap 5, so this turn does run and fails.
+    await expect(
+      runBrain({
+        tenantId: "tenant-1",
+        conversationId: "conv-fail",
+        message: "fail again",
+      }),
+    ).rejects.toBe(err2);
+
+    // Cumulative is now 6 → next turn fails fast.
+    await expect(
+      runBrain({
+        tenantId: "tenant-1",
+        conversationId: "conv-fail",
+        message: "should fail fast",
+      }),
+    ).rejects.toBeInstanceOf(AnthropicConversationBudgetExhaustedError);
+  });
+});
+
+describe("runBrain — P4r-2 cost log", () => {
+  beforeEach(() => {
+    __resetConversationRetryBudgetForTests();
+  });
+
+  it("emits [brain-cost] when usage is populated", async () => {
+    const client = new ScriptableClient();
+    client.pushSuccess({
+      usage: {
+        inputTokens: 1000,
+        outputTokens: 200,
+        cacheCreationInputTokens: 800,
+        cacheReadInputTokens: 0,
+      },
+    });
+    __setClaudeClientForTests(client);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runBrain({
+      tenantId: "tenant-1",
+      conversationId: "conv-cost",
+      message: "hi",
+    });
+    const matched = logSpy.mock.calls.find((c) =>
+      typeof c[0] === "string" && c[0].startsWith("[brain-cost]"),
+    );
+    expect(matched).toBeDefined();
+    const line = matched![0] as string;
+    expect(line).toContain("tenant=tenant-1");
+    expect(line).toContain("model=claude-sonnet-4-6");
+    expect(line).toContain("input=1000");
+    expect(line).toContain("output=200");
+    expect(line).toContain("cache_create=800");
+    expect(line).toContain("cache_read=0");
+    expect(line).toContain("retries=0");
+    // Cost is non-zero given the input.
+    expect(line).toMatch(/cost=\$\d+\.\d{6}/);
+    logSpy.mockRestore();
+  });
+
+  it("skips [brain-cost] when usage is null (stub path)", async () => {
+    const client = new ScriptableClient();
+    client.pushSuccess({ usage: null });
+    __setClaudeClientForTests(client);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runBrain({ tenantId: "tenant-1", message: "hi" });
+    const matched = logSpy.mock.calls.find((c) =>
+      typeof c[0] === "string" && c[0].startsWith("[brain-cost]"),
+    );
+    expect(matched).toBeUndefined();
+    logSpy.mockRestore();
+  });
+});

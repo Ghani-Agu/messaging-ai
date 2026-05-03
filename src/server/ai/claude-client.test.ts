@@ -86,6 +86,7 @@ describe("__setClaudeClientForTests — injection", () => {
         },
         modelId: "mock",
         usage: null,
+        retriesUsed: 0,
       };
     }
 

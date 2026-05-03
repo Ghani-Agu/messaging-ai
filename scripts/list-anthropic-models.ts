@@ -84,3 +84,5 @@ main().catch((err) => {
   console.error("list-anthropic-models failed:", err);
   process.exit(1);
 });
+
+export {};

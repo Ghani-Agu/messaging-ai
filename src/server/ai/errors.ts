@@ -23,12 +23,34 @@ export abstract class AnthropicError extends Error {
   readonly retryable: boolean;
   /** HTTP status code if the error originated from a response, else undefined. */
   readonly status?: number;
+  /**
+   * Number of retries the failing call used before giving up. Set by the
+   * RealClaudeClient retry loop right before throw. Used by the
+   * orchestrator's per-conversation retry-budget tracker (Gate-1 K5).
+   */
+  retriesUsed = 0;
 
   constructor(message: string, opts: { retryable: boolean; status?: number }) {
     super(message);
     this.name = this.constructor.name;
     this.retryable = opts.retryable;
     this.status = opts.status;
+  }
+}
+
+/**
+ * Conversation-level retry budget exhausted (Gate-1 K5 addition). Thrown
+ * by the orchestrator when per-conversation cumulative retries would
+ * exceed CONVERSATION_RETRY_CAP. No more API calls for this conversation
+ * until a turn succeeds cleanly with 0 retries.
+ */
+export class AnthropicConversationBudgetExhaustedError extends AnthropicError {
+  constructor(retriesUsed: number, cap: number) {
+    super(
+      `conversation retry budget exhausted (${retriesUsed}/${cap})`,
+      { retryable: false },
+    );
+    this.retriesUsed = retriesUsed;
   }
 }
 

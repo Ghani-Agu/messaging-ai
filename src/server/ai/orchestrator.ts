@@ -34,6 +34,14 @@ import {
   type SendReplyToolArgs,
   type SupportedReplyLanguage,
 } from "./claude-client";
+import {
+  AnthropicConversationBudgetExhaustedError,
+  AnthropicError,
+  AnthropicToolRefusalError,
+} from "./errors";
+import { CONVERSATION_RETRY_CAP } from "./anthropic-config";
+import { computeCostUsd, formatUsd } from "./pricing";
+import { getToolRefusalFallback } from "./fallbacks";
 
 /**
  * AI brain orchestrator.
@@ -80,11 +88,37 @@ export type BrainHistoryTurn = HistoryTurn;
 export type BrainInput = {
   tenantId: string;
   message: string;
+  /**
+   * Optional conversation ID. When provided, the orchestrator tracks
+   * cumulative retries against CONVERSATION_RETRY_CAP and fails fast if
+   * the budget is exhausted (Gate-1 K5). Smart-import / one-shot calls
+   * pass undefined and skip the budget check.
+   */
+  conversationId?: string;
   /** Oldest → newest. Trimmed to the last N turns inside the orchestrator. */
   history?: BrainHistoryTurn[];
   /** Override retrieval top-K. Default: 8. */
   topK?: number;
 };
+
+/**
+ * Per-conversation cumulative retry tracker (Gate-1 K5). Module-scoped
+ * Map; survives across runBrain calls but not across process restarts.
+ * Trade-off accepted: a process restart resets the budget for in-flight
+ * conversations. For v1 this is fine — the budget exists to short-circuit
+ * runaway retry storms within a session, not to enforce a hard SLA.
+ *
+ * The Map is uncapped on entry count; for v1 a single process won't see
+ * enough concurrent conversations to matter. If we ever do, swap to an
+ * LRU-with-TTL — the contract here is just "increment per non-zero
+ * retriesUsed, reset on a clean turn".
+ */
+const conversationRetryBudget = new Map<string, number>();
+
+/** Test affordance: clear the conversation retry tracker between runs. */
+export function __resetConversationRetryBudgetForTests(): void {
+  conversationRetryBudget.clear();
+}
 
 /**
  * BrainResult.citations is a flat array indexed [1]..[N] in Block C, with
@@ -376,22 +410,123 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
     );
   }
 
-  const client = getClaudeClient();
-  const claudeResult = await client.sendReply({
-    system,
-    userMessage,
-    maxTokens: MAX_REPLY_TOKENS,
-  });
-  const tool: SendReplyToolArgs = claudeResult.toolArgs;
-
-  // Top retrieval-truth signal: prefer the strongest chunk vector score,
-  // but if items beat chunks on similarity, surface that instead. The
-  // confidence formula treats this as "how grounded was retrieval" —
-  // either kind counts.
+  // Pre-Claude top-similarity computation (also used for fallback paths).
   const topChunkScore = retrievedChunks[0]?.vectorScore ?? 0;
   const topItemScore = retrievedItems[0]?.vectorScore ?? 0;
   const topQnaScore = retrievedQna[0]?.score ?? 0;
   const topChunkSimilarity = Math.max(topChunkScore, topItemScore, topQnaScore);
+
+  // Per-conversation retry budget enforcement (Gate-1 K5). When the
+  // cumulative retry counter would exceed the cap, fail fast — don't
+  // even attempt the API call. Counter resets when a turn succeeds with
+  // retriesUsed === 0. Smart-import / one-shot calls (no conversationId)
+  // skip the budget entirely.
+  const convId = input.conversationId;
+  if (convId) {
+    const used = conversationRetryBudget.get(convId) ?? 0;
+    if (used >= CONVERSATION_RETRY_CAP) {
+      const err = new AnthropicConversationBudgetExhaustedError(
+        used,
+        CONVERSATION_RETRY_CAP,
+      );
+      logBrainError({
+        tenantId,
+        conversationId: convId,
+        err,
+      });
+      throw err;
+    }
+  }
+
+  const client = getClaudeClient();
+  let claudeResult;
+  try {
+    claudeResult = await client.sendReply({
+      system,
+      userMessage,
+      maxTokens: MAX_REPLY_TOKENS,
+    });
+  } catch (err) {
+    // Bookkeeping: even on failure, the retries the client used count
+    // against the conversation's budget.
+    if (convId && err instanceof AnthropicError) {
+      const prior = conversationRetryBudget.get(convId) ?? 0;
+      conversationRetryBudget.set(convId, prior + (err.retriesUsed ?? 0));
+    }
+
+    // Tool-use refusal: synthesize a deterministic fallback BrainResult
+    // (Gate-1 E + 'other decisions') so the conversation continues
+    // gracefully and the gap-logger picks up the OUTSIDE_SCOPE.
+    if (err instanceof AnthropicToolRefusalError) {
+      logBrainError({
+        tenantId,
+        conversationId: convId,
+        err,
+      });
+      return {
+        reply: getToolRefusalFallback(detectedLanguage),
+        language: detectedLanguage,
+        citations: brainCitations,
+        citationsUsed: [],
+        groundedness: 0,
+        confidence: 0,
+        escalation: "OUTSIDE_SCOPE",
+        aiMetadata: {
+          modelId: "anthropic:tool-refusal",
+          claudeRecommendedEscalation: true,
+          claudeReason: "TOOL_REFUSAL",
+          topChunkSimilarity,
+          usage: null,
+        },
+      };
+    }
+
+    // All other Anthropic errors: log structured then bubble up. The route
+    // handler's stream closes without `done` and the widget renders the
+    // existing connection-lost banner (Gate-1 K8).
+    if (err instanceof AnthropicError) {
+      logBrainError({
+        tenantId,
+        conversationId: convId,
+        err,
+      });
+    }
+    throw err;
+  }
+
+  // Bookkeeping: update the conversation retry budget. retriesUsed === 0
+  // resets the counter; > 0 accumulates.
+  if (convId) {
+    if (claudeResult.retriesUsed === 0) conversationRetryBudget.set(convId, 0);
+    else {
+      const prior = conversationRetryBudget.get(convId) ?? 0;
+      conversationRetryBudget.set(convId, prior + claudeResult.retriesUsed);
+    }
+  }
+
+  const tool: SendReplyToolArgs = claudeResult.toolArgs;
+
+  // [brain-cost] one-line structured log per Gate-1 K6. Only the real
+  // client populates `usage`; stub returns null and skips the log.
+  if (claudeResult.usage) {
+    const u = claudeResult.usage;
+    let costUsd = 0;
+    try {
+      costUsd = computeCostUsd(claudeResult.modelId, u);
+    } catch {
+      // Unknown model — pricing table doesn't cover it. Log zero rather
+      // than crash the request; the [brain-cost] line is diagnostic, not
+      // load-bearing.
+      costUsd = 0;
+    }
+    console.log(
+      `[brain-cost] tenant=${tenantId} model=${claudeResult.modelId} ` +
+        `input=${u.inputTokens} output=${u.outputTokens} ` +
+        `cache_create=${u.cacheCreationInputTokens ?? 0} ` +
+        `cache_read=${u.cacheReadInputTokens ?? 0} ` +
+        `retries=${claudeResult.retriesUsed} cost=${formatUsd(costUsd)}`,
+    );
+  }
 
   const confidence = computeConfidence({
     groundedness: tool.groundedness,
@@ -422,6 +557,25 @@ export async function runBrain(input: BrainInput): Promise<BrainResult> {
       usage: claudeResult.usage,
     },
   };
+}
+
+/**
+ * Structured one-liner for Anthropic-side failures (Gate-1 K8 addition).
+ * Lets ops grep `[brain-error]` for outage windows without parsing stack
+ * traces. Tenant + conversation + error type + retriesUsed + status.
+ */
+function logBrainError(args: {
+  tenantId: string;
+  conversationId?: string;
+  err: AnthropicError;
+}): void {
+  const { tenantId, conversationId, err } = args;
+  const status = err.status ?? "n/a";
+  const retries = err.retriesUsed;
+  console.log(
+    `[brain-error] tenant=${tenantId} conversation=${conversationId ?? "n/a"} ` +
+      `type=${err.name} status=${status} retries=${retries} message=${JSON.stringify(err.message)}`,
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

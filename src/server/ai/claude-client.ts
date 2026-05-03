@@ -180,8 +180,24 @@ export type SendReplyResult = {
   toolArgs: SendReplyToolArgs;
   /** Diagnostic — populated by the real client. Stub returns "stub". */
   modelId: string;
-  /** Diagnostic — null from the stub. */
-  usage: { inputTokens: number; outputTokens: number } | null;
+  /**
+   * Diagnostic — null from the stub. The real client populates the
+   * Anthropic usage breakdown. cacheCreationInputTokens / cacheReadInputTokens
+   * become populated once prompt caching wires up in P4r-3.
+   */
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+  } | null;
+  /**
+   * Number of retries this single sendReply call performed before
+   * succeeding. 0 means the first attempt landed cleanly. Used by the
+   * orchestrator's per-conversation retry-budget tracker (Gate-1 K5).
+   * Stub always returns 0.
+   */
+  retriesUsed: number;
 };
 
 /**
@@ -315,6 +331,7 @@ export class StubClaudeClient implements ClaudeClient {
       toolArgs,
       modelId: "stub",
       usage: null,
+      retriesUsed: 0,
     };
   }
 
@@ -518,11 +535,16 @@ export function getClaudeClient(): ClaudeClient {
     return cached;
   }
 
-  // Step 3: real client when credentials available. Wired in P4r-2 — for
-  // P4r-1 we still return stub so the existing pipeline keeps working.
+  // Step 3: real client when credentials available (P4r-2). Resolved via
+  // require() rather than dynamic import so the synchronous getClaudeClient
+  // contract is preserved. The SDK module is only loaded along this branch
+  // — the stub path stays SDK-free.
   if (process.env.ANTHROPIC_API_KEY) {
-    // TODO(P4r-2): return new RealClaudeClient({ apiKey, modelId }).
-    cached = new StubClaudeClient();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports
+    const mod: typeof import("./real-claude-client") = require("./real-claude-client");
+    cached = new mod.RealClaudeClient({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    });
     return cached;
   }
 

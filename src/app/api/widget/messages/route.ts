@@ -157,6 +157,7 @@ export async function POST(req: Request): Promise<Response> {
         let lastResult: BrainResult | null = null;
         for await (const event of runBrainStream({
           tenantId,
+          conversationId,
           message: userMessage,
           history,
         })) {
