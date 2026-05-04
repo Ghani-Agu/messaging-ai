@@ -43,7 +43,15 @@ const COPY: Record<AuthMode, {
 
 const initialState: EmailSignInState = { status: "idle" };
 
-export function AuthCard({ mode }: { mode: AuthMode }) {
+const DEFAULT_EYEBROW = "Secure access";
+
+export function AuthCard({
+  mode,
+  eyebrow = DEFAULT_EYEBROW,
+}: {
+  mode: AuthMode;
+  eyebrow?: string;
+}) {
   const copy = COPY[mode];
   const [state, formAction, pending] = useActionState(signInWithEmail, initialState);
 
@@ -58,9 +66,22 @@ export function AuthCard({ mode }: { mode: AuthMode }) {
         className="rounded-2xl border border-[var(--border-subtle)] p-8 shadow-[var(--shadow-lg)] backdrop-blur-xl"
         style={{ backgroundColor: "color-mix(in oklab, var(--bg-surface) 88%, transparent)" }}
       >
-        <div className="mb-6 space-y-2">
-          <h1 className="text-h2 text-[var(--text-primary)]">{copy.title}</h1>
-          <p className="text-body text-[var(--text-secondary)]">{copy.subtitle}</p>
+        <div className="mb-6">
+          <div
+            aria-hidden
+            className="mb-5 flex size-10 items-center justify-center rounded-md text-h4 font-semibold text-white"
+            style={{
+              background: "var(--gradient-primary)",
+              boxShadow: "var(--shadow-glow)",
+            }}
+          >
+            M
+          </div>
+          <p className="text-caption font-medium uppercase tracking-wider text-[var(--text-tertiary)]">
+            {eyebrow}
+          </p>
+          <h1 className="mt-2 text-h2 text-[var(--text-primary)]">{copy.title}</h1>
+          <p className="mt-2 text-body text-[var(--text-secondary)]">{copy.subtitle}</p>
         </div>
 
         <form action={signInWithGoogle} className="mb-4">
