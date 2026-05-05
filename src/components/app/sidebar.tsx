@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronsLeft, ChevronsRight, Sparkles } from "lucide-react";
+import { CommandPaletteTrigger } from "./command-palette-trigger";
 import { SidebarNav, type SidebarNavCounts } from "./sidebar-nav";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 import { UserMenu } from "./user-menu";
@@ -44,9 +45,10 @@ type SidebarProps = {
 /**
  * Operator-app sidebar. Collapsible (persisted in localStorage), with an
  * eyebrow-sectioned layout: Workspace block → Navigation list → footer
- * (AI Brain card + UserMenu). The ⌘K trigger is no longer rendered as a
- * dedicated button — the global keybinding still works (see
- * CommandPaletteTrigger's keydown handler in the layout).
+ * (Search ⌘K + AI Brain card + UserMenu). The CommandPaletteTrigger
+ * carries both the visible button and the global ⌘K / Ctrl-K keydown
+ * listener that dispatches `command-palette:open` to the host palette
+ * mounted in the tenant layout.
  */
 export function Sidebar({
   tenant,
@@ -125,7 +127,13 @@ export function Sidebar({
       </div>
 
       {/* Footer */}
-      <div className="space-y-3 border-t border-[var(--border-subtle)] p-3">
+      <div
+        className={cn(
+          "space-y-3 border-t border-[var(--border-subtle)] p-3",
+          collapsed && "flex flex-col items-center",
+        )}
+      >
+        <CommandPaletteTrigger compact={collapsed} />
         <AiBrainCard collapsed={collapsed} />
         <UserMenu user={user} compact={collapsed} />
       </div>

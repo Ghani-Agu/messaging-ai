@@ -2,14 +2,23 @@
 
 import { Search } from "lucide-react";
 import { useEffect } from "react";
+import { TooltipHint } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 /**
- * Visible button + global ⌘K hotkey listener. The actual palette UI is
- * mounted in the (app) shell (see CommandPalette in step 10) and listens
- * for a custom event that this trigger dispatches.
+ * Visible button + global ⌘K / Ctrl-K hotkey listener. The actual palette
+ * UI is mounted in the tenant layout (see CommandPalette) and listens for
+ * a `command-palette:open` custom event that this trigger dispatches.
+ *
+ * Both the click handler and the keydown listener dispatch the same event,
+ * so mounting this once anywhere in the chrome wires both affordances.
  */
-export function CommandPaletteTrigger() {
+export function CommandPaletteTrigger({
+  compact = false,
+}: {
+  /** Icon-only square button for the collapsed sidebar. */
+  compact?: boolean;
+}) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const isMacMeta = e.metaKey;
@@ -25,6 +34,27 @@ export function CommandPaletteTrigger() {
 
   function open() {
     window.dispatchEvent(new CustomEvent("command-palette:open"));
+  }
+
+  if (compact) {
+    return (
+      <TooltipHint label="Search (⌘K)">
+        <button
+          type="button"
+          onClick={open}
+          aria-label="Search"
+          className={cn(
+            "flex size-10 items-center justify-center rounded-md",
+            "text-[var(--text-secondary)]",
+            "transition-colors duration-150 ease-out",
+            "hover:bg-[var(--bg-surface-elevated)] hover:text-[var(--text-primary)]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)]",
+          )}
+        >
+          <Search className="size-4" aria-hidden />
+        </button>
+      </TooltipHint>
+    );
   }
 
   return (
