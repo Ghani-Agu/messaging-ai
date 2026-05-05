@@ -23,6 +23,7 @@ import { Card } from "@/components/ui/card";
 import { PageShell } from "@/components/ui/page-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { Eyebrow } from "@/components/ui/eyebrow";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
   createFileSource,
@@ -48,26 +49,31 @@ type Status = SourceSummary["status"];
 
 const STATUS_PILL: Record<
   Status,
-  { label: string; tone: string; icon: typeof Clock; spin?: boolean }
+  {
+    label: string;
+    variant: "default" | "accent" | "success" | "danger";
+    icon: typeof Clock;
+    spin?: boolean;
+  }
 > = {
-  PENDING: { label: "Queued", tone: "border-[var(--border-default)] text-[var(--text-secondary)]", icon: Clock },
-  PROCESSING: { label: "Processing", tone: "border-[var(--accent-base)]/40 text-[var(--accent-hover)]", icon: Loader2, spin: true },
-  READY: { label: "Ready", tone: "border-[var(--success)]/40 text-[var(--success)]", icon: CheckCircle2 },
-  ERROR: { label: "Error", tone: "border-[var(--danger)]/40 text-[var(--danger)]", icon: AlertTriangle },
+  PENDING: { label: "Queued", variant: "default", icon: Clock },
+  PROCESSING: {
+    label: "Processing",
+    variant: "accent",
+    icon: Loader2,
+    spin: true,
+  },
+  READY: { label: "Ready", variant: "success", icon: CheckCircle2 },
+  ERROR: { label: "Error", variant: "danger", icon: AlertTriangle },
 };
 
 function StatusPill({ status }: { status: Status }) {
-  const { label, tone, icon: Icon, spin } = STATUS_PILL[status];
+  const { label, variant, icon: Icon, spin } = STATUS_PILL[status];
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border bg-[var(--bg-surface)] px-2 py-0.5 text-caption",
-        tone,
-      )}
-    >
+    <Badge variant={variant} size="sm" className="gap-1.5">
       <Icon className={cn("h-3 w-3", spin && "animate-spin")} aria-hidden />
       {label}
-    </span>
+    </Badge>
   );
 }
 

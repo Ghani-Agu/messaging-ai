@@ -20,6 +20,7 @@ import type { KnowledgeChunk, KnowledgeSource } from "@prisma/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PageShell } from "@/components/ui/page-shell";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
   deleteSource as deleteSourceAction,
@@ -32,11 +33,18 @@ const TYPE_ICON = {
   MANUAL: Pencil,
 } as const;
 
+// Tightened to Badge variants — same semantics as the source-list pill
+// in knowledge-list-client.
 const STATUS_PILL = {
-  PENDING: { label: "Queued", tone: "border-[var(--border-default)] text-[var(--text-secondary)]", icon: Clock },
-  PROCESSING: { label: "Processing", tone: "border-[var(--accent-base)]/40 text-[var(--accent-hover)]", icon: Loader2, spin: true },
-  READY: { label: "Ready", tone: "border-[var(--success)]/40 text-[var(--success)]", icon: CheckCircle2 },
-  ERROR: { label: "Error", tone: "border-[var(--danger)]/40 text-[var(--danger)]", icon: AlertTriangle },
+  PENDING: { label: "Queued", variant: "default" as const, icon: Clock },
+  PROCESSING: {
+    label: "Processing",
+    variant: "accent" as const,
+    icon: Loader2,
+    spin: true,
+  },
+  READY: { label: "Ready", variant: "success" as const, icon: CheckCircle2 },
+  ERROR: { label: "Error", variant: "danger" as const, icon: AlertTriangle },
 } as const;
 
 type LogEntry = { ts: string; level: "info" | "ok" | "err"; text: string };
@@ -115,15 +123,15 @@ export function SourceDetailClient({
             <div className="flex items-center gap-2">
               <Icon className="h-4 w-4 text-[var(--text-tertiary)]" />
               <h2 className="text-h3 text-[var(--text-primary)]">{source.name}</h2>
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full border bg-[var(--bg-surface)] px-2 py-0.5 text-caption",
-                  pill.tone,
-                )}
-              >
-                <PillIcon className={cn("h-3 w-3", "spin" in pill && pill.spin && "animate-spin")} />
+              <Badge variant={pill.variant} size="sm" className="gap-1.5">
+                <PillIcon
+                  className={cn(
+                    "h-3 w-3",
+                    "spin" in pill && pill.spin && "animate-spin",
+                  )}
+                />
                 {pill.label}
-              </span>
+              </Badge>
             </div>
             <p className="mt-1 text-body-sm text-[var(--text-secondary)]">
               {totalChunks} chunks ·{" "}

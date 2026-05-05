@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { ChevronRight, type LucideIcon } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { cardVariants } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 /**
@@ -9,30 +11,23 @@ import { cn } from "@/lib/utils";
  * (when `comingInPhase` is set). Mutually exclusive — `href` wins if both.
  *
  * Status pill semantics:
- *   - "connected" → success green; widget channel is live and serving.
- *   - "paused"    → warning amber; channel exists but operator-paused
+ *   - "connected" → success Badge; widget channel is live and serving.
+ *                   Row picks up the active Card variant (per-tenant accent
+ *                   border + glow) so connected channels stand out at a
+ *                   glance.
+ *   - "paused"    → warning Badge; channel exists but operator-paused
  *                   (mapped from DISCONNECTED / ERROR statuses on read).
- *   - "available" → muted neutral; not yet enabled (no row exists).
- *   - "soon"      → muted neutral with phase tag; render via comingInPhase.
+ *   - "available" → default Badge; not yet enabled (no row exists).
  */
 export type ChannelRowStatus = "connected" | "paused" | "available";
 
-const STATUS_VARIANTS: Record<ChannelRowStatus, { label: string; className: string }> = {
-  connected: {
-    label: "Connected",
-    className:
-      "bg-[color-mix(in_oklab,var(--success)_15%,transparent)] text-[var(--success)] border-[color-mix(in_oklab,var(--success)_30%,transparent)]",
-  },
-  paused: {
-    label: "Paused",
-    className:
-      "bg-[color-mix(in_oklab,var(--warning)_15%,transparent)] text-[var(--warning)] border-[color-mix(in_oklab,var(--warning)_30%,transparent)]",
-  },
-  available: {
-    label: "Available",
-    className:
-      "bg-[var(--bg-surface)] text-[var(--text-tertiary)] border-[var(--border-subtle)]",
-  },
+const STATUS_BADGE: Record<
+  ChannelRowStatus,
+  { label: string; variant: "success" | "warning" | "default" }
+> = {
+  connected: { label: "Connected", variant: "success" },
+  paused: { label: "Paused", variant: "warning" },
+  available: { label: "Available", variant: "default" },
 };
 
 export function ChannelRow({
@@ -64,14 +59,9 @@ export function ChannelRow({
             {name}
           </span>
           {status ? (
-            <span
-              className={cn(
-                "inline-flex items-center rounded-full border px-2 py-0.5 text-caption font-medium",
-                STATUS_VARIANTS[status].className,
-              )}
-            >
-              {STATUS_VARIANTS[status].label}
-            </span>
+            <Badge variant={STATUS_BADGE[status].variant} size="sm">
+              {STATUS_BADGE[status].label}
+            </Badge>
           ) : null}
         </div>
         <p className="mt-0.5 truncate text-body-sm text-[var(--text-tertiary)]">
@@ -84,15 +74,20 @@ export function ChannelRow({
           className="size-4 shrink-0 text-[var(--text-tertiary)] transition-colors duration-150 group-hover:text-[var(--text-secondary)]"
         />
       ) : comingInPhase !== undefined ? (
-        <span className="inline-flex shrink-0 items-center rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-1 text-caption text-[var(--text-tertiary)]">
+        <Badge variant="default" size="md">
           Phase {comingInPhase}
-        </span>
+        </Badge>
       ) : null}
     </>
   );
 
+  // Connected channels get the active Card variant (accent border + glow);
+  // everything else uses the default Card. Override padding on top so the
+  // row stays single-line at compact heights.
+  const variant = status === "connected" ? "active" : "default";
   const baseClass = cn(
-    "group flex items-center gap-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-3",
+    cardVariants({ variant }),
+    "group flex items-center gap-4 px-4 py-3",
     "transition-colors duration-150 ease-out",
   );
 
