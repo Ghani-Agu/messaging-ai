@@ -1,14 +1,34 @@
+import { cva, type VariantProps } from "class-variance-authority";
 import { forwardRef, type HTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
-export const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => (
+const cardVariants = cva("", {
+  variants: {
+    variant: {
+      // Default — preserves the pre-Phase-11 appearance exactly so existing
+      // consumers that omit `variant` are unchanged.
+      default:
+        "rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-sm",
+      // Active — for "highlighted" cards (per-tenant accent border + glow).
+      active:
+        "rounded-lg border border-[color-mix(in_oklab,var(--accent-base)_35%,transparent)] bg-[var(--bg-surface)] shadow-[var(--shadow-glow)]",
+      // Ghost — bare. No border, no surface, no shadow. For when the
+      // surrounding chrome already provides the container.
+      ghost: "",
+    },
+  },
+  defaultVariants: { variant: "default" },
+});
+
+export interface CardProps
+  extends HTMLAttributes<HTMLDivElement>,
+    VariantProps<typeof cardVariants> {}
+
+export const Card = forwardRef<HTMLDivElement, CardProps>(
+  ({ className, variant, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn(
-        "rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-sm",
-        className,
-      )}
+      className={cn(cardVariants({ variant }), className)}
       {...props}
     />
   ),
@@ -62,3 +82,5 @@ export const CardFooter = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEleme
   ),
 );
 CardFooter.displayName = "CardFooter";
+
+export { cardVariants };
