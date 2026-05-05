@@ -19,8 +19,10 @@ import {
   buildConversationHeaderMetadata,
   customerDisplayLabel,
 } from "@/lib/conversation-display";
-import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { Badge } from "@/components/ui/badge";
 import { DashboardMessageBubble } from "./message-bubble";
 
 const POLL_INTERVAL_MS = 4000;
@@ -136,79 +138,69 @@ function DetailHeader({
     customerPhone: conversation.customer.phone,
     customerExternalId: conversation.customer.externalId,
   });
+  const title = customerDisplayLabel({
+    name: conversation.customer.name,
+    externalId: conversation.customer.externalId,
+    channelType: conversation.channel.type,
+  });
+  const eyebrowMeta = (
+    <Eyebrow icon={ChannelIcon}>
+      {headerMeta.channelLabel}
+      {headerMeta.contextLabel ? (
+        <>
+          <span aria-hidden className="mx-1.5 text-[var(--text-tertiary)]">
+            ·
+          </span>
+          <span className="font-mono normal-case tracking-normal">
+            {headerMeta.contextLabel}
+          </span>
+        </>
+      ) : null}
+      {conversation.language ? (
+        <>
+          <span aria-hidden className="mx-1.5 text-[var(--text-tertiary)]">
+            ·
+          </span>
+          <span className="font-mono normal-case tracking-normal">
+            {conversation.language}
+          </span>
+        </>
+      ) : null}
+    </Eyebrow>
+  );
   return (
-    <header className="mt-3 mb-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-h2 text-[var(--text-primary)]">
-            {customerDisplayLabel({
-              name: conversation.customer.name,
-              externalId: conversation.customer.externalId,
-              channelType: conversation.channel.type,
-            })}
-          </h1>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-body-sm text-[var(--text-secondary)]">
-            <span className="inline-flex items-center gap-1.5">
-              <ChannelIcon aria-hidden className="size-3.5" />
-              {headerMeta.channelLabel}
-            </span>
-            {headerMeta.contextLabel ? (
-              <>
-                <span aria-hidden>·</span>
-                <span className="font-mono text-caption text-[var(--text-tertiary)]">
-                  {headerMeta.contextLabel}
-                </span>
-              </>
-            ) : null}
-            {conversation.language ? (
-              <>
-                <span aria-hidden>·</span>
-                <span>
-                  Language:{" "}
-                  <span className="font-mono uppercase">
-                    {conversation.language}
-                  </span>
-                </span>
-              </>
-            ) : null}
-          </div>
-        </div>
-        <DetailStatusBadge
-          status={conversation.status}
-          aiEnabled={conversation.aiEnabled}
-        />
-      </div>
+    <div className="mt-3">
+      <PageHeader
+        eyebrow={eyebrowMeta}
+        title={title}
+        actions={
+          <DetailStatusBadge
+            status={conversation.status}
+            aiEnabled={conversation.aiEnabled}
+          />
+        }
+      />
       {conversation.status === "HUMAN_HANDLING" && escalationReason ? (
         <EscalationCallout reason={escalationReason} />
       ) : null}
-    </header>
+    </div>
   );
 }
 
-const DETAIL_STATUS_VARIANTS: Record<
+// Map ConversationStatus → Badge variant. Detail-page label is more
+// descriptive ("Escalated · awaiting human") than the list-page one
+// because there's room.
+const DETAIL_STATUS_BADGE: Record<
   ConversationStatus,
-  { label: string; className: string }
+  { label: string; variant: "success" | "warning" | "default" }
 > = {
-  ACTIVE: {
-    label: "Active",
-    className:
-      "border-[color-mix(in_oklab,var(--success)_30%,transparent)] bg-[color-mix(in_oklab,var(--success)_15%,transparent)] text-[var(--success)]",
-  },
+  ACTIVE: { label: "Active", variant: "success" },
   HUMAN_HANDLING: {
     label: "Escalated · awaiting human",
-    className:
-      "border-[color-mix(in_oklab,var(--warning)_30%,transparent)] bg-[color-mix(in_oklab,var(--warning)_15%,transparent)] text-[var(--warning)]",
+    variant: "warning",
   },
-  PAUSED: {
-    label: "Paused",
-    className:
-      "border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-secondary)]",
-  },
-  CLOSED: {
-    label: "Closed",
-    className:
-      "border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-tertiary)]",
-  },
+  PAUSED: { label: "Paused", variant: "default" },
+  CLOSED: { label: "Closed", variant: "default" },
 };
 
 function DetailStatusBadge({
@@ -218,17 +210,10 @@ function DetailStatusBadge({
   status: ConversationStatus;
   aiEnabled: boolean;
 }) {
-  const v = DETAIL_STATUS_VARIANTS[status];
+  const v = DETAIL_STATUS_BADGE[status];
   return (
     <div className="flex flex-col items-end gap-1">
-      <span
-        className={cn(
-          "inline-flex items-center rounded-full border px-2.5 py-0.5 text-caption font-medium",
-          v.className,
-        )}
-      >
-        {v.label}
-      </span>
+      <Badge variant={v.variant}>{v.label}</Badge>
       <span className="text-caption text-[var(--text-tertiary)]">
         {aiEnabled ? "AI replying" : "AI paused"}
       </span>

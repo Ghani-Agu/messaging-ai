@@ -22,6 +22,9 @@ import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/ui/page-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { Eyebrow } from "@/components/ui/eyebrow";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Field } from "@/components/ui/field";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -113,10 +116,10 @@ export function ConversationsListClient({
       {rows.length === 0 ? (
         <EmptyState />
       ) : (
-        <ul className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]">
+        <ul className="space-y-3">
           {rows.map((row) => (
             <li key={row.id}>
-              <ConversationRow slug={slug} row={row} />
+              <ConversationCard slug={slug} row={row} />
             </li>
           ))}
         </ul>
@@ -145,32 +148,40 @@ function ChannelFilterButton({
   onSelect: () => void;
 }) {
   const Icon = filter.icon;
+  // Badge asChild lets us keep the design-system pill chrome while
+  // the underlying element stays a real <button> (focus, disabled, etc).
+  // The override className bumps the pill height for a comfortable hit
+  // target — Badge's `md` is sized for inline tags.
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      disabled={!filter.enabled}
+    <Badge
+      asChild
+      variant={active ? "accent" : "default"}
       className={cn(
-        "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-body-sm font-medium",
+        "h-8 cursor-pointer gap-2 px-3 text-body-sm",
         "transition-colors duration-150 ease-out",
-        active
-          ? "border-[var(--accent-base)] bg-[color-mix(in_oklab,var(--accent-base)_15%,transparent)] text-[var(--accent-hover)]"
-          : "border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--border-default)] hover:text-[var(--text-primary)]",
+        !active &&
+          "hover:border-[var(--border-default)] hover:text-[var(--text-primary)]",
         !filter.enabled && "cursor-not-allowed opacity-60",
       )}
     >
-      <Icon aria-hidden className="size-3.5" />
-      {filter.label}
-      {!filter.enabled && filter.comingInPhase !== undefined ? (
-        <span className="text-caption text-[var(--text-tertiary)]">
-          (Phase {filter.comingInPhase})
-        </span>
-      ) : null}
-    </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        disabled={!filter.enabled}
+      >
+        <Icon aria-hidden className="size-3.5" />
+        {filter.label}
+        {!filter.enabled && filter.comingInPhase !== undefined ? (
+          <span className="text-caption text-[var(--text-tertiary)]">
+            (Phase {filter.comingInPhase})
+          </span>
+        ) : null}
+      </button>
+    </Badge>
   );
 }
 
-function ConversationRow({
+function ConversationCard({
   slug,
   row,
 }: {
@@ -183,59 +194,76 @@ function ConversationRow({
     externalId: row.customer.externalId,
     channelType: row.channel.type,
   });
+  const channelLabel = row.channel.type.toLowerCase();
+  const idShort = row.id.slice(-6);
   return (
-    <Link
-      href={`/${slug}/conversations/${row.id}`}
-      className={cn(
-        "group flex items-center gap-4 px-4 py-3.5",
-        "transition-colors duration-150 ease-out hover:bg-[var(--bg-surface-elevated)]",
-        "focus-visible:outline-none focus-visible:bg-[var(--bg-surface-elevated)]",
-      )}
-    >
-      <CustomerAvatar row={row} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-body font-medium text-[var(--text-primary)]">
+    <Card className="transition-colors duration-150 ease-out hover:border-[var(--border-default)]">
+      <Link
+        href={`/${slug}/conversations/${row.id}`}
+        className={cn(
+          "group flex items-start gap-4 p-4",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-base)] focus-visible:rounded-lg",
+        )}
+      >
+        <CustomerAvatar row={row} />
+        <div className="min-w-0 flex-1 space-y-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Eyebrow>
+              conv:{idShort} · {channelLabel}
+            </Eyebrow>
+            <ConversationStatusBadge status={row.status} />
+            {row.language ? (
+              <Badge variant="default" size="sm" className="font-mono uppercase">
+                {row.language}
+              </Badge>
+            ) : null}
+          </div>
+          <p className="truncate text-body font-medium text-[var(--text-primary)]">
             {label}
-          </span>
-          <ConversationStatusPill status={row.status} />
-          {row.language ? <LanguageFlag language={row.language} /> : null}
+          </p>
+          <p className="line-clamp-2 text-body-sm text-[var(--text-tertiary)]">
+            {lastMessage ? (
+              <>
+                <span className="font-medium text-[var(--text-secondary)]">
+                  {lastMessage.sender === "CUSTOMER"
+                    ? "Customer"
+                    : lastMessage.sender === "AI"
+                      ? "AI"
+                      : "Agent"}
+                  :{" "}
+                </span>
+                {lastMessage.content}
+              </>
+            ) : (
+              <span className="italic">No messages yet</span>
+            )}
+          </p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <Field
+              label="Last activity"
+              value={formatRelative(row.lastMessageAt)}
+            />
+            <Field
+              label="Messages"
+              value={`${row._count.messages.toLocaleString()} ${
+                row._count.messages === 1 ? "msg" : "msgs"
+              }`}
+            />
+            <Field
+              label="Customer"
+              value={row.customer.name ?? row.customer.externalId.slice(-8)}
+            />
+          </div>
         </div>
-        <p className="mt-0.5 truncate text-body-sm text-[var(--text-tertiary)]">
-          {lastMessage ? (
-            <>
-              <span className="font-medium text-[var(--text-secondary)]">
-                {lastMessage.sender === "CUSTOMER"
-                  ? "Customer"
-                  : lastMessage.sender === "AI"
-                    ? "AI"
-                    : "Agent"}
-                :{" "}
-              </span>
-              {lastMessage.content}
-            </>
-          ) : (
-            <span className="italic">No messages yet</span>
-          )}
-        </p>
-      </div>
-      <div className="flex shrink-0 flex-col items-end gap-1">
-        <time
-          dateTime={row.lastMessageAt.toISOString()}
-          className="text-caption text-[var(--text-tertiary)]"
-        >
-          {formatRelative(row.lastMessageAt)}
-        </time>
-        <span className="text-caption text-[var(--text-tertiary)]">
-          {row._count.messages}{" "}
-          {row._count.messages === 1 ? "msg" : "msgs"}
+        <span className="inline-flex shrink-0 items-center gap-1 self-center text-body-sm font-medium text-[var(--text-tertiary)] transition-colors duration-150 group-hover:text-[var(--accent-hover)]">
+          Open
+          <ChevronRight
+            aria-hidden
+            className="size-4 transition-transform duration-150 group-hover:translate-x-0.5"
+          />
         </span>
-      </div>
-      <ChevronRight
-        aria-hidden
-        className="size-4 shrink-0 text-[var(--text-tertiary)] transition-colors duration-150 group-hover:text-[var(--text-secondary)]"
-      />
-    </Link>
+      </Link>
+    </Card>
   );
 }
 
@@ -254,51 +282,26 @@ function CustomerAvatar({ row }: { row: ConversationListRow }) {
   );
 }
 
-const STATUS_PILLS: Record<
+// Map ConversationStatus → Badge variant. Keeps the design-system
+// status semantics (success/warning/default) consistent across the
+// list, the conversation detail header, and any future surfaces that
+// surface a conversation pill.
+const STATUS_BADGE: Record<
   ConversationStatus,
-  { label: string; className: string }
+  { label: string; variant: "success" | "warning" | "default" }
 > = {
-  ACTIVE: {
-    label: "Active",
-    className:
-      "border-[color-mix(in_oklab,var(--success)_30%,transparent)] bg-[color-mix(in_oklab,var(--success)_15%,transparent)] text-[var(--success)]",
-  },
-  HUMAN_HANDLING: {
-    label: "Escalated",
-    className:
-      "border-[color-mix(in_oklab,var(--warning)_30%,transparent)] bg-[color-mix(in_oklab,var(--warning)_15%,transparent)] text-[var(--warning)]",
-  },
-  PAUSED: {
-    label: "Paused",
-    className:
-      "border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-secondary)]",
-  },
-  CLOSED: {
-    label: "Closed",
-    className:
-      "border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-tertiary)]",
-  },
+  ACTIVE: { label: "Active", variant: "success" },
+  HUMAN_HANDLING: { label: "Escalated", variant: "warning" },
+  PAUSED: { label: "Paused", variant: "default" },
+  CLOSED: { label: "Closed", variant: "default" },
 };
 
-function ConversationStatusPill({ status }: { status: ConversationStatus }) {
-  const v = STATUS_PILLS[status];
+function ConversationStatusBadge({ status }: { status: ConversationStatus }) {
+  const v = STATUS_BADGE[status];
   return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full border px-1.5 py-0 text-caption font-medium",
-        v.className,
-      )}
-    >
+    <Badge variant={v.variant} size="sm">
       {v.label}
-    </span>
-  );
-}
-
-function LanguageFlag({ language }: { language: string }) {
-  return (
-    <span className="inline-flex items-center rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-1.5 py-0 font-mono text-caption uppercase text-[var(--text-tertiary)]">
-      {language}
-    </span>
+    </Badge>
   );
 }
 
