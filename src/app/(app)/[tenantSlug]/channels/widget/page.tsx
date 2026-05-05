@@ -6,6 +6,9 @@ import { getWidgetChannel } from "@/server/db/channels";
 import { parseWidgetChannelConfig } from "@/lib/validators";
 import { WidgetConfigCard } from "@/components/app/channels/widget-config-card";
 import { EnableWidgetForm } from "@/components/app/channels/enable-widget-form";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 export const metadata: Metadata = {
   title: "Website widget",
@@ -38,7 +41,7 @@ export default async function WidgetChannelPage({
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10 lg:py-14">
+    <PageShell width="3xl">
       <Link
         href={`/${tenantSlug}/channels`}
         className="inline-flex items-center gap-1.5 text-body-sm text-[var(--text-tertiary)] transition-colors duration-150 hover:text-[var(--text-secondary)]"
@@ -46,14 +49,13 @@ export default async function WidgetChannelPage({
         <ArrowLeft className="size-3.5" />
         Channels
       </Link>
-      <header className="mt-3 mb-8">
-        <h1 className="text-h1 text-[var(--text-primary)]">Website widget</h1>
-        <p className="mt-2 text-body text-[var(--text-secondary)]">
-          The widget runs on every page where the embed snippet is loaded.
-          Origins below are checked on each request — empty allowlist means
-          any site can embed (v1 default).
-        </p>
-      </header>
+      <div className="mt-3">
+        <PageHeader
+          eyebrow={<Eyebrow>Channel</Eyebrow>}
+          title="Website widget"
+          description="The widget runs on every page where the embed snippet is loaded. Origins below are checked on each request — empty allowlist means any site can embed (v1 default)."
+        />
+      </div>
 
       {widget ? (
         (() => {
@@ -75,6 +77,6 @@ export default async function WidgetChannelPage({
       ) : (
         <EnableWidgetForm tenantSlug={tenantSlug} canEnable={canEnable} />
       )}
-    </div>
+    </PageShell>
   );
 }

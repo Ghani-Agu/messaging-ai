@@ -14,16 +14,21 @@ type Membership = {
 export function WorkspaceSwitcher({
   current,
   memberships,
+  compact = false,
 }: {
   current: { id: string; slug: string; name: string };
   memberships: Membership[];
+  /** Icon-only mode for collapsed sidebar — shows just the gradient square. */
+  compact?: boolean;
 }) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
         className={cn(
-          "group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-150 ease-out",
-          "hover:bg-[var(--bg-surface-elevated)]",
+          "group flex items-center gap-2 rounded-md text-left transition-colors duration-150 ease-out",
+          compact
+            ? "size-10 justify-center"
+            : "w-full px-2 py-1.5 hover:bg-[var(--bg-surface-elevated)]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)]",
         )}
         aria-label={`Switch workspace. Current: ${current.name}`}
@@ -35,15 +40,19 @@ export function WorkspaceSwitcher({
         >
           {current.name.charAt(0).toUpperCase()}
         </span>
-        <span className="flex min-w-0 flex-1 flex-col leading-tight">
-          <span className="truncate text-body-sm font-medium text-[var(--text-primary)]">
-            {current.name}
-          </span>
-          <span className="truncate text-caption text-[var(--text-tertiary)]">
-            messaging-ai.app/{current.slug}
-          </span>
-        </span>
-        <ChevronsUpDown className="size-4 shrink-0 text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)]" />
+        {compact ? null : (
+          <>
+            <span className="flex min-w-0 flex-1 flex-col leading-tight">
+              <span className="truncate text-body-sm font-medium text-[var(--text-primary)]">
+                {current.name}
+              </span>
+              <span className="truncate text-caption text-[var(--text-tertiary)]">
+                messaging-ai.app/{current.slug}
+              </span>
+            </span>
+            <ChevronsUpDown className="size-4 shrink-0 text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)]" />
+          </>
+        )}
       </DropdownMenu.Trigger>
 
       <DropdownMenu.Portal>

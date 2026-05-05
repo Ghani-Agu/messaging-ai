@@ -19,6 +19,7 @@ import {
 import type { KnowledgeChunk, KnowledgeSource } from "@prisma/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PageShell } from "@/components/ui/page-shell";
 import { cn } from "@/lib/utils";
 import {
   deleteSource as deleteSourceAction,
@@ -99,7 +100,7 @@ export function SourceDetailClient({
   };
 
   return (
-    <div className="space-y-4 pb-24">
+    <PageShell width="5xl" className="space-y-4 pb-24">
       <a
         href={`/${slug}/knowledge`}
         className="inline-flex items-center gap-1 text-body-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
@@ -253,6 +254,6 @@ export function SourceDetailClient({
           )}
         </Card>
       </div>
-    </div>
+    </PageShell>
   );
 }

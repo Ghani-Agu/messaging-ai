@@ -14,6 +14,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 import { cn } from "@/lib/utils";
 import {
   commitImportedItemsAction,
@@ -185,27 +188,20 @@ export function ItemsImportClient({
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-6">
-      <header className="space-y-2">
-        <Link
-          href={`/${tenantSlug}/knowledge/items`}
-          className="inline-flex items-center gap-1 text-body-sm text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-        >
-          <ArrowLeft className="size-3.5" aria-hidden />
-          Back to Products
-        </Link>
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <h1 className="text-h2 text-[var(--text-primary)]">Import products</h1>
-            <p className="text-body-sm text-[var(--text-secondary)]">
-              Paste catalog text or a CSV. Review the parsed drafts inline, then
-              commit the ones you want. Each committed item gets embedded for
-              semantic search.
-            </p>
-          </div>
-          <StatusPill status={status} />
-        </div>
-      </header>
+    <PageShell width="6xl" className="space-y-6">
+      <Link
+        href={`/${tenantSlug}/knowledge/items`}
+        className="inline-flex items-center gap-1 text-body-sm text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        <ArrowLeft className="size-3.5" aria-hidden />
+        Back to Products
+      </Link>
+      <PageHeader
+        eyebrow={<Eyebrow>Knowledge</Eyebrow>}
+        title="Import products"
+        description="Paste catalog text or a CSV. Review the parsed drafts inline, then commit the ones you want. Each committed item gets embedded for semantic search."
+        actions={<StatusPill status={status} />}
+      />
 
       {/* Tabs ──────────────────────────────────────────────────────── */}
       <div className="flex gap-1 border-b border-[var(--border-subtle)]">
@@ -264,7 +260,7 @@ export function ItemsImportClient({
           <DraftsTable drafts={drafts} onPatch={patch} disabled={!canImport} />
         </div>
       ) : null}
-    </div>
+    </PageShell>
   );
 }
 

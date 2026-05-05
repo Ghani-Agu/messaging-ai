@@ -9,6 +9,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { getTenantContext } from "@/server/tenancy/context";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -68,18 +71,12 @@ export default async function DashboardPage({
   const greeting = ctx.user.name ?? ctx.user.email?.split("@")[0] ?? "there";
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10 lg:px-10 lg:py-14">
-      <header className="mb-10">
-        <p className="mb-1 text-body-sm text-[var(--text-tertiary)]">
-          {ctx.tenant.name}
-        </p>
-        <h1 className="text-h1 text-[var(--text-primary)]">
-          Welcome, {greeting}.
-        </h1>
-        <p className="mt-2 text-body text-[var(--text-secondary)]">
-          You&apos;re a few steps away from your AI replying to customers.
-        </p>
-      </header>
+    <PageShell width="5xl">
+      <PageHeader
+        eyebrow={<Eyebrow>{ctx.tenant.name}</Eyebrow>}
+        title={`Welcome, ${greeting}.`}
+        description="You're a few steps away from your AI replying to customers."
+      />
 
       <section aria-labelledby="next-steps-heading" className="mb-12">
         <h2
@@ -158,6 +155,6 @@ export default async function DashboardPage({
           ))}
         </div>
       </section>
-    </div>
+    </PageShell>
   );
 }

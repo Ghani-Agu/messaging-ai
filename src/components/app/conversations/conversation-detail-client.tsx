@@ -20,6 +20,7 @@ import {
   customerDisplayLabel,
 } from "@/lib/conversation-display";
 import { cn } from "@/lib/utils";
+import { PageShell } from "@/components/ui/page-shell";
 import { DashboardMessageBubble } from "./message-bubble";
 
 const POLL_INTERVAL_MS = 4000;
@@ -85,7 +86,7 @@ export function ConversationDetailClient({
   const ChannelIcon = CHANNEL_ICON[conversation.channel.type];
 
   return (
-    <div className="mx-auto flex h-[calc(100vh-0px)] max-w-4xl flex-col px-6 py-8 lg:px-10 lg:py-10">
+    <PageShell width="4xl" className="flex h-screen flex-col py-8 lg:py-10">
       <Link
         href={`/${slug}/conversations`}
         className="inline-flex items-center gap-1.5 text-body-sm text-[var(--text-tertiary)] transition-colors duration-150 hover:text-[var(--text-secondary)]"
@@ -112,7 +113,7 @@ export function ConversationDetailClient({
           ))
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }
 

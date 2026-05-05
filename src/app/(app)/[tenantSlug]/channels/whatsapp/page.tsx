@@ -6,6 +6,9 @@ import { getWhatsAppChannel } from "@/server/db/channels";
 import { parseWhatsAppChannelConfig } from "@/lib/validators";
 import { WhatsAppConfigCard } from "@/components/app/channels/whatsapp-config-card";
 import { WhatsAppConnectForm } from "@/components/app/channels/whatsapp-connect-form";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 export const metadata: Metadata = {
   title: "WhatsApp",
@@ -35,7 +38,7 @@ export default async function WhatsAppChannelPage({
   const verifyToken = process.env.META_VERIFY_TOKEN ?? null;
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10 lg:py-14">
+    <PageShell width="3xl">
       <Link
         href={`/${tenantSlug}/channels`}
         className="inline-flex items-center gap-1.5 text-body-sm text-[var(--text-tertiary)] transition-colors duration-150 hover:text-[var(--text-secondary)]"
@@ -43,17 +46,13 @@ export default async function WhatsAppChannelPage({
         <ArrowLeft className="size-3.5" />
         Channels
       </Link>
-      <header className="mt-3 mb-8">
-        <h1 className="text-h1 text-[var(--text-primary)]">WhatsApp</h1>
-        <p className="mt-2 text-body text-[var(--text-secondary)]">
-          Two-way WhatsApp Business messaging via 360dialog. Inbound
-          messages route through the same AI brain as the website widget;
-          outbound replies respect Meta&rsquo;s 24-hour customer-service
-          window — replies outside the window are persisted with a
-          &ldquo;not delivered&rdquo; indicator (templates land in
-          Phase 6.5).
-        </p>
-      </header>
+      <div className="mt-3">
+        <PageHeader
+          eyebrow={<Eyebrow>Channel</Eyebrow>}
+          title="WhatsApp"
+          description="Two-way WhatsApp Business messaging via 360dialog. Inbound messages route through the same AI brain as the website widget; outbound replies respect Meta's 24-hour customer-service window — replies outside the window are persisted with a 'not delivered' indicator (templates land in Phase 6.5)."
+        />
+      </div>
 
       {channel ? (
         (() => {
@@ -75,6 +74,6 @@ export default async function WhatsAppChannelPage({
       ) : (
         <WhatsAppConnectForm tenantSlug={tenantSlug} canConnect={canConnect} />
       )}
-    </div>
+    </PageShell>
   );
 }

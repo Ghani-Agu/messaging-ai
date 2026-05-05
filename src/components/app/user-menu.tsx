@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 
 export function UserMenu({
   user,
+  compact = false,
 }: {
   user: {
     name: string | null;
@@ -16,6 +17,8 @@ export function UserMenu({
     image: string | null;
     isSuperAdmin: boolean;
   };
+  /** Icon-only mode for collapsed sidebar — shows just the avatar. */
+  compact?: boolean;
 }) {
   const initials = (user.name ?? user.email ?? "?").trim().charAt(0).toUpperCase();
   const display = user.name ?? user.email ?? "Account";
@@ -24,8 +27,10 @@ export function UserMenu({
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
         className={cn(
-          "group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-150 ease-out",
-          "hover:bg-[var(--bg-surface-elevated)]",
+          "group flex items-center gap-2 rounded-md text-left transition-colors duration-150 ease-out",
+          compact
+            ? "size-10 justify-center"
+            : "w-full px-2 py-1.5 hover:bg-[var(--bg-surface-elevated)]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)]",
         )}
         aria-label="Open user menu"
@@ -45,16 +50,18 @@ export function UserMenu({
             {initials}
           </span>
         )}
-        <span className="flex min-w-0 flex-1 flex-col leading-tight">
-          <span className="truncate text-body-sm font-medium text-[var(--text-primary)]">
-            {display}
-          </span>
-          {user.email && user.email !== display ? (
-            <span className="truncate text-caption text-[var(--text-tertiary)]">
-              {user.email}
+        {compact ? null : (
+          <span className="flex min-w-0 flex-1 flex-col leading-tight">
+            <span className="truncate text-body-sm font-medium text-[var(--text-primary)]">
+              {display}
             </span>
-          ) : null}
-        </span>
+            {user.email && user.email !== display ? (
+              <span className="truncate text-caption text-[var(--text-tertiary)]">
+                {user.email}
+              </span>
+            ) : null}
+          </span>
+        )}
       </DropdownMenu.Trigger>
 
       <DropdownMenu.Portal>

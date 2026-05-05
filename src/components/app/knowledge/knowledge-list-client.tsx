@@ -20,6 +20,9 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 import { cn } from "@/lib/utils";
 import {
   createFileSource,
@@ -124,20 +127,18 @@ export function KnowledgeListClient({ slug, initialSources }: Props) {
   }, [slug, hasInProgress]);
 
   return (
-    <div className="space-y-12 pb-24">
-      <header className="flex items-end justify-between border-b border-[var(--border-subtle)] pb-6">
-        <div>
-          <h1 className="text-h2 text-[var(--text-primary)]">Knowledge</h1>
-          <p className="mt-1 text-body-sm text-[var(--text-secondary)]">
-            Teach your AI by adding website crawls, files, or manual entries.
-            Sources are chunked, embedded, and made retrievable at reply time.
-          </p>
-        </div>
-        <Button onClick={() => setModalOpen(true)}>
-          <Plus className="mr-1.5 h-4 w-4" />
-          Add source
-        </Button>
-      </header>
+    <PageShell width="5xl" className="space-y-10 pb-24">
+      <PageHeader
+        eyebrow={<Eyebrow>Knowledge</Eyebrow>}
+        title="Documents"
+        description="Teach your AI by adding website crawls, files, or manual entries. Sources are chunked, embedded, and made retrievable at reply time."
+        actions={
+          <Button onClick={() => setModalOpen(true)}>
+            <Plus className="mr-1.5 h-4 w-4" />
+            Add source
+          </Button>
+        }
+      />
 
       {sources.length === 0 ? (
         <EmptyState onAdd={() => setModalOpen(true)} />
@@ -160,7 +161,7 @@ export function KnowledgeListClient({ slug, initialSources }: Props) {
           router.refresh();
         }}
       />
-    </div>
+    </PageShell>
   );
 }
 

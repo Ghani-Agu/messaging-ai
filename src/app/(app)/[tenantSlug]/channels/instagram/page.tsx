@@ -6,6 +6,9 @@ import { getInstagramChannel } from "@/server/db/channels";
 import { parseInstagramChannelConfig } from "@/lib/validators";
 import { MetaConfigCard } from "@/components/app/channels/meta-config-card";
 import { MetaConnectForm } from "@/components/app/channels/meta-connect-form";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 export const metadata: Metadata = {
   title: "Instagram",
@@ -35,7 +38,7 @@ export default async function InstagramChannelPage({
   const verifyToken = process.env.META_VERIFY_TOKEN ?? null;
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10 lg:py-14">
+    <PageShell width="3xl">
       <Link
         href={`/${tenantSlug}/channels`}
         className="inline-flex items-center gap-1.5 text-body-sm text-[var(--text-tertiary)] transition-colors duration-150 hover:text-[var(--text-secondary)]"
@@ -43,15 +46,13 @@ export default async function InstagramChannelPage({
         <ArrowLeft className="size-3.5" />
         Channels
       </Link>
-      <header className="mt-3 mb-8">
-        <h1 className="text-h1 text-[var(--text-primary)]">Instagram</h1>
-        <p className="mt-2 text-body text-[var(--text-secondary)]">
-          Reply to Instagram DMs from a connected Business account. IG
-          Business accounts always ride a Facebook Page — connecting via
-          the Page Access Token authorizes both Messenger and Instagram
-          on that Page. The same 24-hour customer-service window applies.
-        </p>
-      </header>
+      <div className="mt-3">
+        <PageHeader
+          eyebrow={<Eyebrow>Channel</Eyebrow>}
+          title="Instagram"
+          description="Reply to Instagram DMs from a connected Business account. IG Business accounts always ride a Facebook Page — connecting via the Page Access Token authorizes both Messenger and Instagram on that Page. The same 24-hour customer-service window applies."
+        />
+      </div>
 
       {channel ? (
         (() => {
@@ -84,6 +85,6 @@ export default async function InstagramChannelPage({
           entryPlatform="instagram"
         />
       )}
-    </div>
+    </PageShell>
   );
 }

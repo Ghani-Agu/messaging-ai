@@ -18,6 +18,9 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 import { cn } from "@/lib/utils";
 import {
   createItemAction,
@@ -208,21 +211,16 @@ export function ItemsListClient({
   const overCap = count >= MAX_ITEMS_PER_TENANT;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-6">
+    <PageShell width="6xl" className="space-y-6">
       {/* Header ─────────────────────────────────────────────────────── */}
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-h2 text-[var(--text-primary)]">Products</h1>
-          <p className="text-body-sm text-[var(--text-secondary)]">
-            Structured items the AI can reason about — products, services, packages.
-            Each item has typed fields (name, price, availability, specs) plus a
-            semantic embedding for retrieval. {count}{" "}
-            {count === 1 ? "item" : "items"} total.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <StatusPill status={status} />
-          {canEdit ? (
+      <PageHeader
+        eyebrow={<Eyebrow>Knowledge</Eyebrow>}
+        title="Products"
+        description={`Structured items the AI can reason about — products, services, packages. Each item has typed fields (name, price, availability, specs) plus a semantic embedding for retrieval. ${count} ${count === 1 ? "item" : "items"} total.`}
+        actions={
+          <div className="flex items-center gap-2">
+            <StatusPill status={status} />
+            {canEdit ? (
             <>
               <Link
                 href={`/${tenantSlug}/knowledge/items/import`}
@@ -252,8 +250,9 @@ export function ItemsListClient({
               </Button>
             </>
           ) : null}
-        </div>
-      </header>
+          </div>
+        }
+      />
 
       {/* Soft-cap banner ─────────────────────────────────────────── */}
       {overCap ? (
@@ -422,7 +421,7 @@ export function ItemsListClient({
           />
         </Modal>
       ) : null}
-    </div>
+    </PageShell>
   );
 }
 

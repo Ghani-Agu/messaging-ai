@@ -6,6 +6,7 @@ import { getTenantContext } from "@/server/tenancy/context";
 import { Sidebar } from "@/components/app/sidebar";
 import { CommandPalette } from "@/components/app/command-palette";
 import { TenantThemeProvider } from "@/components/app/tenant-theme";
+import { AmbientBackdrop } from "@/components/app/ambient-backdrop";
 
 type LayoutParams = { tenantSlug: string };
 
@@ -37,7 +38,8 @@ export default async function TenantLayout({
       slug={ctx.tenant.slug}
       accentColor={ctx.tenant.accentColor}
     >
-      <div className="flex min-h-screen">
+      <AmbientBackdrop tenantTinted />
+      <div className="relative flex min-h-screen">
         <Sidebar
           tenant={ctx.tenant}
           memberships={memberships}

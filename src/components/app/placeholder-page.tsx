@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 /**
  * Empty state used for every Phase-2 placeholder route. Real but inert —
@@ -20,10 +23,8 @@ export function PlaceholderPage({
   children?: ReactNode;
 }) {
   return (
-    <div className="mx-auto flex min-h-full max-w-3xl flex-col px-6 py-10 lg:px-10 lg:py-14">
-      <header className="mb-10">
-        <h1 className="text-h1 text-[var(--text-primary)]">{title}</h1>
-      </header>
+    <PageShell width="3xl">
+      <PageHeader title={title} eyebrow={<Eyebrow>Coming soon</Eyebrow>} />
 
       <div className="flex flex-1 items-center justify-center">
         <div
@@ -53,6 +54,6 @@ export function PlaceholderPage({
           {children ? <div className="mt-6">{children}</div> : null}
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }

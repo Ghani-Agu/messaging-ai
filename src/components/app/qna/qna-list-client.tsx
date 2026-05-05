@@ -16,6 +16,9 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 import { cn } from "@/lib/utils";
 import {
   bulkDeleteQnaPairsAction,
@@ -212,21 +215,15 @@ export function QnaListClient({
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-h2 text-[var(--text-primary)]">Q&amp;A pairs</h1>
-          <p className="text-body-sm text-[var(--text-secondary)]">
-            Authoritative answers to known questions. When a customer&apos;s
-            question matches a Q&amp;A above {(85).toFixed(0)}% similarity, the
-            AI uses the answer near-verbatim — only adapting language register.
-            {" "}
-            {count} {count === 1 ? "pair" : "pairs"} total.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <StatusPill status={status} tenantSlug={tenantSlug} />
-          {canEdit ? (
+    <PageShell width="6xl" className="space-y-6">
+      <PageHeader
+        eyebrow={<Eyebrow>Knowledge</Eyebrow>}
+        title="Q&A pairs"
+        description={`Authoritative answers to known questions. When a customer's question matches a Q&A above ${(85).toFixed(0)}% similarity, the AI uses the answer near-verbatim — only adapting language register. ${count} ${count === 1 ? "pair" : "pairs"} total.`}
+        actions={
+          <div className="flex items-center gap-2">
+            <StatusPill status={status} tenantSlug={tenantSlug} />
+            {canEdit ? (
             <>
               {selectedCount > 0 ? (
                 <Button
@@ -250,8 +247,9 @@ export function QnaListClient({
               </Button>
             </>
           ) : null}
-        </div>
-      </header>
+          </div>
+        }
+      />
 
       {overCap ? (
         <div className="flex items-start gap-2 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-4 py-3 text-body-sm text-[var(--warning)]">
@@ -434,7 +432,7 @@ export function QnaListClient({
           />
         </Modal>
       ) : null}
-    </div>
+    </PageShell>
   );
 }
 

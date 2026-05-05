@@ -6,6 +6,9 @@ import { getMessengerChannel } from "@/server/db/channels";
 import { parseMessengerChannelConfig } from "@/lib/validators";
 import { MetaConfigCard } from "@/components/app/channels/meta-config-card";
 import { MetaConnectForm } from "@/components/app/channels/meta-connect-form";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 export const metadata: Metadata = {
   title: "Messenger",
@@ -35,7 +38,7 @@ export default async function MessengerChannelPage({
   const verifyToken = process.env.META_VERIFY_TOKEN ?? null;
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10 lg:py-14">
+    <PageShell width="3xl">
       <Link
         href={`/${tenantSlug}/channels`}
         className="inline-flex items-center gap-1.5 text-body-sm text-[var(--text-tertiary)] transition-colors duration-150 hover:text-[var(--text-secondary)]"
@@ -43,17 +46,13 @@ export default async function MessengerChannelPage({
         <ArrowLeft className="size-3.5" />
         Channels
       </Link>
-      <header className="mt-3 mb-8">
-        <h1 className="text-h1 text-[var(--text-primary)]">Messenger</h1>
-        <p className="mt-2 text-body text-[var(--text-secondary)]">
-          Two-way Facebook Messenger DMs via the Meta Graph API. The same
-          Page Access Token authorizes Instagram on a linked Business
-          account — connecting one Page can light up both surfaces.
-          Outbound replies respect Meta&rsquo;s 24-hour customer-service
-          window; messages outside the window persist with a &ldquo;not
-          delivered&rdquo; indicator.
-        </p>
-      </header>
+      <div className="mt-3">
+        <PageHeader
+          eyebrow={<Eyebrow>Channel</Eyebrow>}
+          title="Messenger"
+          description="Two-way Facebook Messenger DMs via the Meta Graph API. The same Page Access Token authorizes Instagram on a linked Business account — connecting one Page can light up both surfaces. Outbound replies respect Meta's 24-hour customer-service window; messages outside the window persist with a 'not delivered' indicator."
+        />
+      </div>
 
       {channel ? (
         (() => {
@@ -82,6 +81,6 @@ export default async function MessengerChannelPage({
           entryPlatform="messenger"
         />
       )}
-    </div>
+    </PageShell>
   );
 }

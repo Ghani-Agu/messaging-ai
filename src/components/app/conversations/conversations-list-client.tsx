@@ -19,6 +19,9 @@ import {
   customerInitial,
 } from "@/lib/conversation-display";
 import { cn } from "@/lib/utils";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -76,18 +79,12 @@ export function ConversationsListClient({
   }, [slug, filter]);
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10 lg:px-10 lg:py-14">
-      <header className="mb-6">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h1 className="text-h1 text-[var(--text-primary)]">
-              Conversations
-            </h1>
-            <p className="mt-2 text-body text-[var(--text-secondary)]">
-              Live inbox of every customer thread. Read-only this phase —
-              takeover and reply-as-agent ship in Phase 8.
-            </p>
-          </div>
+    <PageShell width="5xl">
+      <PageHeader
+        eyebrow={<Eyebrow>Inbox</Eyebrow>}
+        title="Conversations"
+        description="Live inbox of every customer thread. Read-only this phase — takeover and reply-as-agent ship in Phase 8."
+        actions={
           <span
             aria-live="polite"
             className={cn(
@@ -99,8 +96,8 @@ export function ConversationsListClient({
             <span className="size-1.5 animate-pulse rounded-full bg-[var(--accent-base)]" />
             Refreshing
           </span>
-        </div>
-      </header>
+        }
+      />
 
       <div className="mb-5 flex flex-wrap gap-2">
         {FILTERS.map((f) => (
@@ -130,7 +127,7 @@ export function ConversationsListClient({
           Showing the 50 most recent. Pagination arrives in Phase 9.
         </p>
       ) : null}
-    </div>
+    </PageShell>
   );
 }
 

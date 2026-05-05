@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Database, Sparkles } from "lucide-react";
 import { getTenantContext } from "@/server/tenancy/context";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 export const metadata: Metadata = {
   title: "Live Data Sources",
@@ -29,14 +32,12 @@ export default async function LiveDataPage({
   await getTenantContext(tenantSlug);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
-      <header className="space-y-1">
-        <h1 className="text-h2 text-[var(--text-primary)]">Live Data Sources</h1>
-        <p className="text-body-sm text-[var(--text-secondary)]">
-          Connect external systems so your AI answers from live data instead of
-          stored snapshots.
-        </p>
-      </header>
+    <PageShell width="3xl" className="space-y-6">
+      <PageHeader
+        eyebrow={<Eyebrow>Knowledge</Eyebrow>}
+        title="Live Data Sources"
+        description="Connect external systems so your AI answers from live data instead of stored snapshots."
+      />
 
       <div className="relative overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6">
         <div className="flex items-start gap-4">
@@ -69,6 +70,6 @@ export default async function LiveDataPage({
         sweeps) or curated Q&amp;A pairs. Stored snapshots, refreshed on a
         schedule you control.
       </div>
-    </div>
+    </PageShell>
   );
 }

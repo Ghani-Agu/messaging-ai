@@ -19,6 +19,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 import { cn } from "@/lib/utils";
 
 /**
@@ -119,15 +122,13 @@ export function BusinessInfoClient({
   const pending = status.kind === "pending";
 
   return (
-    <form onSubmit={onSubmit} className="mx-auto max-w-3xl space-y-6 p-6" noValidate>
-      <header className="space-y-1">
-        <h1 className="text-h2 text-[var(--text-primary)]">Business Info</h1>
-        <p className="text-body-sm text-[var(--text-secondary)]">
-          What your AI knows about your business — name, contact, hours, languages.
-          Tier-1 facts are included in every reply prompt; tier-2 facts are pulled
-          in when a customer&apos;s question needs them.
-        </p>
-      </header>
+    <PageShell width="3xl">
+      <form onSubmit={onSubmit} className="space-y-6" noValidate>
+        <PageHeader
+          eyebrow={<Eyebrow>Knowledge</Eyebrow>}
+          title="Business Info"
+          description="What your AI knows about your business — name, contact, hours, languages. Tier-1 facts are included in every reply prompt; tier-2 facts are pulled in when a customer's question needs them."
+        />
 
       {/* Tier 1 ─────────────────────────────────────────────────────────── */}
       <Card>
@@ -285,7 +286,8 @@ export function BusinessInfoClient({
           </span>
         ) : null}
       </div>
-    </form>
+      </form>
+    </PageShell>
   );
 }
 

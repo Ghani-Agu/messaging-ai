@@ -11,6 +11,9 @@ import {
   ChannelRow,
   type ChannelRowStatus,
 } from "@/components/app/channels/channel-row";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 export const metadata: Metadata = {
   title: "Channels",
@@ -66,14 +69,12 @@ export default async function ChannelsPage({
     : "Connect an Instagram Business account (linked to a Facebook Page) for DMs.";
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10 lg:py-14">
-      <header className="mb-8">
-        <h1 className="text-h1 text-[var(--text-primary)]">Channels</h1>
-        <p className="mt-2 text-body text-[var(--text-secondary)]">
-          Connect the surfaces customers reach you on. Each channel routes
-          incoming messages through the same AI brain and conversation thread.
-        </p>
-      </header>
+    <PageShell width="3xl">
+      <PageHeader
+        eyebrow={<Eyebrow>Workspace</Eyebrow>}
+        title="Channels"
+        description="Connect the surfaces customers reach you on. Each channel routes incoming messages through the same AI brain and conversation thread."
+      />
 
       <ul className="space-y-2.5">
         <li>
@@ -113,6 +114,6 @@ export default async function ChannelsPage({
           />
         </li>
       </ul>
-    </div>
+    </PageShell>
   );
 }

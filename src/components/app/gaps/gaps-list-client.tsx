@@ -14,6 +14,9 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageShell } from "@/components/ui/page-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/eyebrow";
 import {
   dismissGapAction,
   loadGapsDigest,
@@ -151,20 +154,13 @@ export function GapsListClient({
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-h2 text-[var(--text-primary)]">Knowledge gaps</h1>
-          <p className="text-body-sm text-[var(--text-secondary)]">
-            Customer questions the AI couldn&apos;t answer in the last 30 days.
-            Similar questions cluster together so a single new Q&amp;A pair can
-            resolve a whole pattern. {clusters.length} active cluster
-            {clusters.length === 1 ? "" : "s"}
-            {unclustered.length > 0 ? ` · ${unclustered.length} unclustered` : ""}.
-          </p>
-        </div>
-        <StatusPill status={status} />
-      </header>
+    <PageShell width="5xl" className="space-y-6">
+      <PageHeader
+        eyebrow={<Eyebrow>Knowledge</Eyebrow>}
+        title="Knowledge gaps"
+        description={`Customer questions the AI couldn't answer in the last 30 days. Similar questions cluster together so a single new Q&A pair can resolve a whole pattern. ${clusters.length} active cluster${clusters.length === 1 ? "" : "s"}${unclustered.length > 0 ? ` · ${unclustered.length} unclustered` : ""}.`}
+        actions={<StatusPill status={status} />}
+      />
 
       {/* Clustered section ──────────────────────────────────────── */}
       <section className="space-y-3">
@@ -242,7 +238,7 @@ export function GapsListClient({
           />
         </Modal>
       ) : null}
-    </div>
+    </PageShell>
   );
 }
 
