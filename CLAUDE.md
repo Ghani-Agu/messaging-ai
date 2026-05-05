@@ -99,10 +99,12 @@ Fix: both `DATABASE_URL` and `DIRECT_DATABASE_URL` must use the **pooler** hostn
 
 | Var | Port | Mode | Required params |
 |---|---|---|---|
-| `DATABASE_URL` | 6543 | transaction (pgbouncer) | `?pgbouncer=true&connection_limit=1` |
+| `DATABASE_URL` | 6543 | transaction (pgbouncer) | `?pgbouncer=true&connection_limit=10&pool_timeout=20` |
 | `DIRECT_DATABASE_URL` | 5432 | session | none |
 
 Username on both is `postgres.<project_ref>` (the form with the dot). Password is the same. Copy from Supabase Dashboard → Project Settings → Database → "Connection string" → Session pooler / Transaction pooler tabs.
+
+**`connection_limit` is the client-side Prisma pool, not the pgbouncer pool.** Earlier guidance pinned this to `1` and it caused `Timed out fetching a new connection from the connection pool` on any page that issued parallel queries (dashboard layout + metrics + 4-second conversations poll, all within one render). With `connection_limit=1`, query #2 in a render queues behind query #1 and trips `pool_timeout` after 10 s. pgbouncer in transaction mode is *designed* to receive multiple client-side connections and multiplex them — Prisma's `connection_limit` is local to this Node process. Keep it at 10 for dev (5+ users would still be fine) and tune `pool_timeout` to 20 s as cushion. Do not lower it back to 1.
 
 ### Supabase: pre-installed extensions cause Prisma drift
 
