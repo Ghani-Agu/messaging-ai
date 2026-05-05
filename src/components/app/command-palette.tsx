@@ -231,7 +231,7 @@ export function CommandPalette({
       id: "workspace:create",
       label: "Create workspace",
       icon: Plus,
-      perform: () => navigate("/onboarding/create-tenant"),
+      perform: () => navigate("/onboarding/create-tenant?intent=add"),
       keywords: ["workspace", "new"],
     },
   ];

@@ -103,7 +103,7 @@ export function WorkspaceSwitcher({
 
           <DropdownMenu.Item asChild>
             <Link
-              href="/onboarding/create-tenant"
+              href="/onboarding/create-tenant?intent=add"
               className="flex items-center gap-2 rounded-md px-2 py-1.5 text-body-sm text-[var(--text-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--bg-surface-overlay)] hover:text-[var(--text-primary)] focus:bg-[var(--bg-surface-overlay)] focus:outline-none"
             >
               <span
