@@ -18,7 +18,7 @@ import { easeOutExpo, durationMedium } from "@/lib/motion";
 type AuthMode = "login" | "signup";
 
 const COPY: Record<AuthMode, {
-  title: string;
+  titlePrefix: string;
   subtitle: string;
   cta: string;
   switchPrompt: string;
@@ -26,7 +26,7 @@ const COPY: Record<AuthMode, {
   switchLabel: string;
 }> = {
   login: {
-    title: "Welcome to WBP AI",
+    titlePrefix: "Sign in to ",
     subtitle: "Sign in to your WBP AI workspace.",
     cta: "Email me a magic link",
     switchPrompt: "New to WBP AI?",
@@ -34,7 +34,7 @@ const COPY: Record<AuthMode, {
     switchLabel: "Create an account",
   },
   signup: {
-    title: "Create your WBP workspace",
+    titlePrefix: "Get started with ",
     subtitle: "Start replying to customers in 5 minutes.",
     cta: "Email me a magic link",
     switchPrompt: "Already have a WBP AI workspace?",
@@ -68,14 +68,12 @@ export function AuthCard({
         className="relative overflow-hidden rounded-2xl border border-[var(--border-subtle)] p-8 shadow-[var(--shadow-lg)] backdrop-blur-xl"
         style={{ backgroundColor: "color-mix(in oklab, var(--bg-surface) 88%, transparent)" }}
       >
-        {/* Decorative top hairline — accent gradient at low alpha. */}
+        {/* Decorative top hairline — slow horizontal shimmer in the accent.
+            Peak alpha travels left-to-right on a 4s loop. Reduced-motion
+            users get the static gradient (see globals.css). */}
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-px"
-          style={{
-            background:
-              "linear-gradient(to right, transparent, color-mix(in oklab, var(--accent-hover) 60%, transparent), transparent)",
-          }}
+          className="auth-card-shimmer pointer-events-none absolute inset-x-0 top-0 h-px"
         />
 
         <div className="mb-6 flex items-start justify-between gap-3">
@@ -84,7 +82,15 @@ export function AuthCard({
             <p className="mt-5 text-caption font-medium uppercase tracking-wider text-[var(--text-tertiary)]">
               {eyebrow}
             </p>
-            <h1 className="mt-2 text-h2 text-[var(--text-primary)]">{copy.title}</h1>
+            <h1 className="mt-2 text-h2 text-[var(--text-primary)]">
+              {copy.titlePrefix}
+              <span
+                className="bg-clip-text text-transparent"
+                style={{ backgroundImage: "var(--gradient-primary)" }}
+              >
+                WBP AI
+              </span>
+            </h1>
             <p className="mt-2 text-body text-[var(--text-secondary)]">{copy.subtitle}</p>
           </div>
           <Badge variant="success" size="sm" className="mt-1 shrink-0">

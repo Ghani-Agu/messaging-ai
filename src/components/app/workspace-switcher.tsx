@@ -43,6 +43,7 @@ export function WorkspaceSwitcher({
           name={current.name}
           slug={current.slug}
           hasBrandLogo={currentHasBrandLogo}
+          compact={compact}
         />
         {compact ? null : (
           <>
@@ -135,9 +136,15 @@ export function WorkspaceSwitcher({
 }
 
 /**
- * Gradient square that hosts the tenant's brand mark. When `hasBrandLogo`
- * is true, renders `/<slug>.png` (Next/Image-optimized PNG) on top of the
- * gradient backdrop. Otherwise, falls back to the tenant initial. The
+ * Tenant brand mark. When `hasBrandLogo` is true, renders `/<slug>.png`
+ * directly on the sidebar surface (no gradient backdrop — the backdrop
+ * competes with the logo). Otherwise, falls back to a gradient square with
+ * the tenant initial so there's still a visual anchor for the brand block.
+ *
+ * The wrapper is fixed-size (size-9 expanded / size-7 collapsed) with
+ * object-contain on the Image so an off-square logo aspect ratio stays
+ * within a predictable cell and aligns with the workspace name text.
+ *
  * `onError` swap covers the dev case where the manifest opted in but the
  * PNG hasn't been dropped into `public/` yet.
  */
@@ -145,30 +152,48 @@ function BrandSquare({
   name,
   slug,
   hasBrandLogo,
+  compact,
 }: {
   name: string;
   slug: string;
   hasBrandLogo: boolean;
+  compact: boolean;
 }) {
   const [errored, setErrored] = useState(false);
   const showLogo = hasBrandLogo && !errored;
-  return (
-    <span
-      aria-hidden
-      className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-md text-body-sm font-semibold text-white"
-      style={{ background: "var(--gradient-primary)" }}
-    >
-      {showLogo ? (
+  const sizeClass = compact ? "size-7" : "size-9";
+
+  if (showLogo) {
+    return (
+      <span
+        aria-hidden
+        className={cn(
+          "flex shrink-0 items-center justify-center overflow-hidden",
+          sizeClass,
+        )}
+      >
         <Image
           src={`/${slug}.png`}
           alt={`${name} logo`}
-          width={22}
-          height={22}
+          width={compact ? 28 : 36}
+          height={compact ? 28 : 36}
+          className="size-full object-contain"
           onError={() => setErrored(true)}
         />
-      ) : (
-        name.charAt(0).toUpperCase()
+      </span>
+    );
+  }
+
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-md text-body-sm font-semibold text-white",
+        sizeClass,
       )}
+      style={{ background: "var(--gradient-primary)" }}
+    >
+      {name.charAt(0).toUpperCase()}
     </span>
   );
 }

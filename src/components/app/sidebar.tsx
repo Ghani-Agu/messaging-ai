@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronsLeft, ChevronsRight, Sparkles } from "lucide-react";
 import { SidebarNav, type SidebarNavCounts } from "./sidebar-nav";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 import { UserMenu } from "./user-menu";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { TooltipHint } from "@/components/ui/tooltip";
-import { easeSpring } from "@/lib/motion";
+import { durationMedium, easeOutExpo, easeSpring } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 const STORAGE_KEY = "sidebar-collapsed";
@@ -126,7 +126,7 @@ export function Sidebar({
 
       {/* Footer */}
       <div className="space-y-3 border-t border-[var(--border-subtle)] p-3">
-        {!collapsed ? <AiBrainCard /> : null}
+        <AiBrainCard collapsed={collapsed} />
         <UserMenu user={user} compact={collapsed} />
       </div>
     </motion.aside>
@@ -169,27 +169,93 @@ function CollapseToggle({
  * Footer info card. Phase B ships the visual + the eyebrow + the gradient
  * progress-bar shell; phase D wires the real confidence rate from a
  * server query and replaces the "—" caption with a percentage.
+ *
+ * Collapsed-sidebar view: the eyebrow + caption hide; the bar rotates
+ * from horizontal to vertical and the percentage value renders below
+ * (the fill direction inverts so the bar fills from the bottom up to
+ * match a vertical-meter mental model). The shift between the two
+ * layouts crossfades over `durationMedium` with `easeOutExpo`. We use
+ * AnimatePresence + opacity rather than animating width/height between
+ * px and %; the latter doesn't interpolate cleanly across units and the
+ * crossfade reads as a coherent transition without juddering. Listed as
+ * an acceptable alternative to the rotation animation in the prompt.
+ *
+ * Reduced-motion users get an instant swap (duration: 0).
  */
-function AiBrainCard() {
+function AiBrainCard({ collapsed }: { collapsed: boolean }) {
+  const prefersReducedMotion = useReducedMotion();
+  const transition = prefersReducedMotion
+    ? { duration: 0 }
+    : { duration: durationMedium, ease: easeOutExpo };
+
   return (
-    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] px-3 py-2.5">
-      <div className="mb-2 flex items-center justify-between">
-        <Eyebrow icon={Sparkles} variant="accent">
-          AI Brain
-        </Eyebrow>
-      </div>
-      <div className="h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]">
-        <div
-          aria-hidden
-          className="h-full w-0 rounded-full"
-          style={{
-            background:
-              "linear-gradient(90deg, var(--accent-active) 0%, var(--accent-hover) 100%)",
-            boxShadow: "0 0 6px var(--accent-glow)",
-          }}
-        />
-      </div>
-      <p className="mt-2 text-caption text-[var(--text-tertiary)]">—</p>
+    <div
+      className={cn(
+        "rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)]",
+        collapsed
+          ? "flex flex-col items-center gap-2 px-1.5 py-2.5"
+          : "px-3 py-2.5",
+      )}
+    >
+      <AnimatePresence mode="wait" initial={false}>
+        {collapsed ? (
+          <motion.div
+            key="collapsed"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={transition}
+            className="flex flex-col items-center gap-2"
+          >
+            <Sparkles
+              className="size-3 text-[var(--accent-hover)]"
+              aria-hidden
+            />
+            {/* Vertical track. flex-col-reverse anchors the fill child to
+                the bottom so the bar reads bottom-up. */}
+            <div className="flex h-12 w-1 flex-col-reverse overflow-hidden rounded-full bg-[var(--border-subtle)]">
+              <div
+                aria-hidden
+                className="h-0 w-full rounded-full"
+                style={{
+                  background:
+                    "linear-gradient(0deg, var(--accent-active) 0%, var(--accent-hover) 100%)",
+                  boxShadow: "0 0 6px var(--accent-glow)",
+                }}
+              />
+            </div>
+            <span className="text-caption font-medium text-[var(--text-tertiary)]">
+              —
+            </span>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="expanded"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={transition}
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <Eyebrow icon={Sparkles} variant="accent">
+                AI Brain
+              </Eyebrow>
+            </div>
+            <div className="h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]">
+              <div
+                aria-hidden
+                className="h-full w-0 rounded-full"
+                style={{
+                  background:
+                    "linear-gradient(90deg, var(--accent-active) 0%, var(--accent-hover) 100%)",
+                  boxShadow: "0 0 6px var(--accent-glow)",
+                }}
+              />
+            </div>
+            <p className="mt-2 text-caption text-[var(--text-tertiary)]">—</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

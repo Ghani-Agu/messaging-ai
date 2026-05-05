@@ -281,3 +281,47 @@ body {
   background: var(--border-strong);
   background-clip: padding-box;
 }
+
+/* =========================================================================
+   AuthCard top-edge shimmer — a slow horizontal traveling gradient on the
+   1px hairline. Subtle: peak alpha is ~65% of `--accent-hover`, the rest
+   fades to transparent. The animated `background-position` shifts the
+   200%-wide gradient so the peak appears at the right edge, travels off
+   to the left, and re-enters from the right. 4s cycle keeps it ambient.
+   ========================================================================= */
+
+.auth-card-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 30%,
+    color-mix(in oklab, var(--accent-hover) 65%, transparent) 50%,
+    transparent 70%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: auth-card-shimmer 4s ease-in-out infinite;
+}
+
+@keyframes auth-card-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-card-shimmer {
+    animation: none;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, var(--accent-hover) 60%, transparent),
+      transparent
+    );
+    background-size: 100% 100%;
+  }
+}

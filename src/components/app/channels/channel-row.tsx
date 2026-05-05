@@ -81,14 +81,14 @@ export function ChannelRow({
     </>
   );
 
-  // Connected channels get the active Card variant (accent border + glow);
-  // everything else uses the default Card. Override padding on top so the
-  // row stays single-line at compact heights.
+  // Connected channels get the active Card variant (stronger accent
+  // border at rest); everything else uses the default Card. Both pick up
+  // Card's hover affordance (accent border + glow) automatically. Padding
+  // overridden on top so the row stays single-line at compact heights.
   const variant = status === "connected" ? "active" : "default";
   const baseClass = cn(
     cardVariants({ variant }),
     "group flex items-center gap-4 px-4 py-3",
-    "transition-colors duration-150 ease-out",
   );
 
   if (href) {
@@ -97,7 +97,6 @@ export function ChannelRow({
         href={href}
         className={cn(
           baseClass,
-          "hover:border-[var(--border-default)] hover:bg-[var(--bg-surface-elevated)]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-base)]",
         )}
       >

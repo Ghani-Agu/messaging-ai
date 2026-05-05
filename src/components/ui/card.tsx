@@ -2,16 +2,27 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { forwardRef, type HTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
+// Universal hover affordance for bordered cards: the border lifts toward
+// the accent and a soft accent glow drops in. Applies to default + active;
+// ghost stays bare. Reduced-motion users get instant state changes.
+const HOVER_GLOW =
+  "transition-[border-color,box-shadow] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none " +
+  "hover:border-[color-mix(in_oklab,var(--accent-base)_45%,transparent)] " +
+  "hover:shadow-[0_0_24px_var(--accent-glow)]";
+
 const cardVariants = cva("", {
   variants: {
     variant: {
-      // Default — preserves the pre-Phase-11 appearance exactly so existing
-      // consumers that omit `variant` are unchanged.
+      // Default — soft surface card with a hover glow affordance.
       default:
-        "rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-sm",
-      // Active — for "highlighted" cards (per-tenant accent border + glow).
+        "rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-sm " +
+        HOVER_GLOW,
+      // Active — stronger accent border at rest; same hover treatment as
+      // default (border further toward accent + glow). No permanent glow
+      // so the surface stays calm at rest.
       active:
-        "rounded-lg border border-[color-mix(in_oklab,var(--accent-base)_35%,transparent)] bg-[var(--bg-surface)] shadow-[var(--shadow-glow)]",
+        "rounded-lg border border-[color-mix(in_oklab,var(--accent-base)_35%,transparent)] bg-[var(--bg-surface)] shadow-sm " +
+        HOVER_GLOW,
       // Ghost — bare. No border, no surface, no shadow. For when the
       // surrounding chrome already provides the container.
       ghost: "",

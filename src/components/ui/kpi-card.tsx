@@ -4,14 +4,24 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 import { Eyebrow } from "./eyebrow";
 
+// Same hover affordance as the Card primitive — the border lifts toward
+// the accent and a soft accent glow drops in. Reduced-motion users get
+// instant state changes.
+const HOVER_GLOW =
+  "transition-[border-color,box-shadow] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none " +
+  "hover:border-[color-mix(in_oklab,var(--accent-base)_45%,transparent)] " +
+  "hover:shadow-[0_0_24px_var(--accent-glow)]";
+
 const kpiCardVariants = cva(
-  "relative overflow-hidden rounded-lg border p-5 transition-colors duration-150 ease-out",
+  "relative overflow-hidden rounded-lg border p-5 " + HOVER_GLOW,
   {
     variants: {
       variant: {
         default: "border-[var(--border-subtle)] bg-[var(--bg-surface)]",
+        // Stronger accent border at rest. No permanent corner radial /
+        // glow — the surface stays calm at rest and lights up on hover.
         active:
-          "border-[color-mix(in_oklab,var(--accent-base)_35%,transparent)] bg-[var(--bg-surface)] shadow-[var(--shadow-glow)]",
+          "border-[color-mix(in_oklab,var(--accent-base)_35%,transparent)] bg-[var(--bg-surface)]",
       },
     },
     defaultVariants: { variant: "default" },
@@ -30,8 +40,9 @@ export interface KpiCardProps
 
 /**
  * KPI tile. Used in the dashboard's headline metrics row. Active variant
- * gets the accent glow, an inset accent shadow, and a corner radial
- * "spotlight" gradient that picks up the per-tenant accent automatically.
+ * has a slightly stronger accent border but no permanent glow / splash —
+ * every variant picks up the same hover affordance (accent border + glow)
+ * as the Card primitive.
  */
 export const KpiCard = forwardRef<HTMLDivElement, KpiCardProps>(
   (
@@ -43,16 +54,6 @@ export const KpiCard = forwardRef<HTMLDivElement, KpiCardProps>(
       className={cn(kpiCardVariants({ variant }), className)}
       {...props}
     >
-      {variant === "active" ? (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute right-0 top-0 size-32"
-          style={{
-            background:
-              "radial-gradient(closest-side, color-mix(in oklab, var(--accent-base) 22%, transparent) 0%, transparent 70%)",
-          }}
-        />
-      ) : null}
       <div className="relative flex items-start justify-between gap-4">
         <Eyebrow>{label}</Eyebrow>
         {Icon ? (
