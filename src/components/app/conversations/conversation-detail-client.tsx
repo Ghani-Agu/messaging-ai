@@ -103,7 +103,7 @@ export function ConversationDetailClient({
 
       <div
         ref={messageListRef}
-        className="mt-4 flex-1 space-y-5 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5"
+        className="custom-scrollbar mt-4 flex-1 space-y-5 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5"
       >
         {conversation.messages.length === 0 ? (
           <p className="text-center text-body-sm text-[var(--text-tertiary)]">

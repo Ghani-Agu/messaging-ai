@@ -1,11 +1,13 @@
 "use client";
 
 import { motion } from "framer-motion";
+import Image from "next/image";
 import Link from "next/link";
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { GoogleIcon } from "./google-icon";
 import { MagneticButton } from "./magnetic-button";
+import { Badge } from "@/components/ui/badge";
 import {
   signInWithEmail,
   signInWithGoogle,
@@ -24,18 +26,18 @@ const COPY: Record<AuthMode, {
   switchLabel: string;
 }> = {
   login: {
-    title: "Welcome back",
-    subtitle: "Sign in to your messaging-ai workspace.",
+    title: "Welcome to WBP AI",
+    subtitle: "Sign in to your WBP AI workspace.",
     cta: "Email me a magic link",
-    switchPrompt: "New to messaging-ai?",
+    switchPrompt: "New to WBP AI?",
     switchHref: "/signup",
     switchLabel: "Create an account",
   },
   signup: {
-    title: "Create your workspace",
+    title: "Create your WBP workspace",
     subtitle: "Start replying to customers in 5 minutes.",
     cta: "Email me a magic link",
-    switchPrompt: "Already have an account?",
+    switchPrompt: "Already have a WBP AI workspace?",
     switchHref: "/login",
     switchLabel: "Sign in",
   },
@@ -63,25 +65,31 @@ export function AuthCard({
       className="w-full max-w-[420px]"
     >
       <div
-        className="rounded-2xl border border-[var(--border-subtle)] p-8 shadow-[var(--shadow-lg)] backdrop-blur-xl"
+        className="relative overflow-hidden rounded-2xl border border-[var(--border-subtle)] p-8 shadow-[var(--shadow-lg)] backdrop-blur-xl"
         style={{ backgroundColor: "color-mix(in oklab, var(--bg-surface) 88%, transparent)" }}
       >
-        <div className="mb-6">
-          <div
-            aria-hidden
-            className="mb-5 flex size-10 items-center justify-center rounded-md text-h4 font-semibold text-white"
-            style={{
-              background: "var(--gradient-primary)",
-              boxShadow: "var(--shadow-glow)",
-            }}
-          >
-            M
+        {/* Decorative top hairline — accent gradient at low alpha. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-px"
+          style={{
+            background:
+              "linear-gradient(to right, transparent, color-mix(in oklab, var(--accent-hover) 60%, transparent), transparent)",
+          }}
+        />
+
+        <div className="mb-6 flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <BrandMark />
+            <p className="mt-5 text-caption font-medium uppercase tracking-wider text-[var(--text-tertiary)]">
+              {eyebrow}
+            </p>
+            <h1 className="mt-2 text-h2 text-[var(--text-primary)]">{copy.title}</h1>
+            <p className="mt-2 text-body text-[var(--text-secondary)]">{copy.subtitle}</p>
           </div>
-          <p className="text-caption font-medium uppercase tracking-wider text-[var(--text-tertiary)]">
-            {eyebrow}
-          </p>
-          <h1 className="mt-2 text-h2 text-[var(--text-primary)]">{copy.title}</h1>
-          <p className="mt-2 text-body text-[var(--text-secondary)]">{copy.subtitle}</p>
+          <Badge variant="success" size="sm" className="mt-1 shrink-0">
+            Protected
+          </Badge>
         </div>
 
         <form action={signInWithGoogle} className="mb-4">
@@ -151,5 +159,39 @@ export function AuthCard({
         By continuing you agree to the terms of service and privacy policy.
       </p>
     </motion.div>
+  );
+}
+
+/**
+ * WBP brand mark — a 40×40 gradient square hosting the WBP logo PNG. If
+ * /wbp.png is missing (dev convenience), falls back to a "W" glyph so the
+ * card still renders. Logo path is hardcoded because the auth surfaces
+ * are platform-branded (pre-tenant); per-tenant logos resolve via the
+ * tenant-brands manifest in the operator app.
+ */
+function BrandMark() {
+  const [errored, setErrored] = useState(false);
+  return (
+    <div
+      aria-hidden
+      className="flex size-10 items-center justify-center rounded-md text-h4 font-semibold text-white"
+      style={{
+        background: "var(--gradient-primary)",
+        boxShadow: "var(--shadow-glow)",
+      }}
+    >
+      {errored ? (
+        "W"
+      ) : (
+        <Image
+          src="/wbp.png"
+          alt="WBP"
+          width={32}
+          height={32}
+          priority
+          onError={() => setErrored(true)}
+        />
+      )}
+    </div>
   );
 }

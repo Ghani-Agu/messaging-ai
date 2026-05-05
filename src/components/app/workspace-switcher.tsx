@@ -2,7 +2,9 @@
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronsUpDown, Plus } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
+import { useState } from "react";
 import { switchWorkspaceAction } from "@/server/tenancy/actions";
 import { cn } from "@/lib/utils";
 
@@ -15,11 +17,15 @@ export function WorkspaceSwitcher({
   current,
   memberships,
   compact = false,
+  currentHasBrandLogo = false,
 }: {
   current: { id: string; slug: string; name: string };
   memberships: Membership[];
   /** Icon-only mode for collapsed sidebar — shows just the gradient square. */
   compact?: boolean;
+  /** When true, render `/<current.slug>.png` inside the gradient square
+   *  instead of the initial. Sourced from `getTenantBrand` in the layout. */
+  currentHasBrandLogo?: boolean;
 }) {
   return (
     <DropdownMenu.Root>
@@ -33,13 +39,11 @@ export function WorkspaceSwitcher({
         )}
         aria-label={`Switch workspace. Current: ${current.name}`}
       >
-        <span
-          aria-hidden
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-body-sm font-semibold text-white"
-          style={{ background: "var(--gradient-primary)" }}
-        >
-          {current.name.charAt(0).toUpperCase()}
-        </span>
+        <BrandSquare
+          name={current.name}
+          slug={current.slug}
+          hasBrandLogo={currentHasBrandLogo}
+        />
         {compact ? null : (
           <>
             <span className="flex min-w-0 flex-1 flex-col leading-tight">
@@ -127,5 +131,44 @@ export function WorkspaceSwitcher({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+  );
+}
+
+/**
+ * Gradient square that hosts the tenant's brand mark. When `hasBrandLogo`
+ * is true, renders `/<slug>.png` (Next/Image-optimized PNG) on top of the
+ * gradient backdrop. Otherwise, falls back to the tenant initial. The
+ * `onError` swap covers the dev case where the manifest opted in but the
+ * PNG hasn't been dropped into `public/` yet.
+ */
+function BrandSquare({
+  name,
+  slug,
+  hasBrandLogo,
+}: {
+  name: string;
+  slug: string;
+  hasBrandLogo: boolean;
+}) {
+  const [errored, setErrored] = useState(false);
+  const showLogo = hasBrandLogo && !errored;
+  return (
+    <span
+      aria-hidden
+      className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-md text-body-sm font-semibold text-white"
+      style={{ background: "var(--gradient-primary)" }}
+    >
+      {showLogo ? (
+        <Image
+          src={`/${slug}.png`}
+          alt={`${name} logo`}
+          width={22}
+          height={22}
+          onError={() => setErrored(true)}
+        />
+      ) : (
+        name.charAt(0).toUpperCase()
+      )}
+    </span>
   );
 }

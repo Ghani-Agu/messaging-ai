@@ -33,6 +33,12 @@ type SidebarProps = {
    * dashboard-metrics queries.
    */
   counts?: SidebarNavCounts;
+  /**
+   * Whether the current tenant has a brand logo asset at `/<slug>.png`.
+   * Resolved upstream from `getTenantBrand(slug)` so the sidebar doesn't
+   * touch the filesystem at render time. Forwards to WorkspaceSwitcher.
+   */
+  hasBrandLogo?: boolean;
 };
 
 /**
@@ -42,7 +48,13 @@ type SidebarProps = {
  * dedicated button — the global keybinding still works (see
  * CommandPaletteTrigger's keydown handler in the layout).
  */
-export function Sidebar({ tenant, memberships, user, counts }: SidebarProps) {
+export function Sidebar({
+  tenant,
+  memberships,
+  user,
+  counts,
+  hasBrandLogo = false,
+}: SidebarProps) {
   const prefersReducedMotion = useReducedMotion();
   const [collapsed, setCollapsed] = useState(false);
 
@@ -75,7 +87,10 @@ export function Sidebar({ tenant, memberships, user, counts }: SidebarProps) {
       animate={{ width: collapsed ? WIDTH_COLLAPSED : WIDTH_EXPANDED }}
       transition={prefersReducedMotion ? { duration: 0 } : easeSpring}
       className={cn(
-        "flex h-screen shrink-0 flex-col overflow-hidden",
+        // Hidden at sm; flex column from md+. Mobile drawer is deferred —
+        // see the placeholder hamburger in the tenant layout.
+        // TODO: phase 11-9 — mobile drawer.
+        "hidden h-screen shrink-0 flex-col overflow-hidden md:flex",
         "border-r border-[var(--border-subtle)] bg-[var(--bg-surface)]/85 backdrop-blur-md",
       )}
     >
@@ -93,11 +108,12 @@ export function Sidebar({ tenant, memberships, user, counts }: SidebarProps) {
           current={tenant}
           memberships={memberships}
           compact={collapsed}
+          currentHasBrandLogo={hasBrandLogo}
         />
       </div>
 
       {/* Navigation */}
-      <div className="flex-1 overflow-y-auto px-3 py-4">
+      <div className="custom-scrollbar flex-1 overflow-y-auto px-3 py-4">
         {!collapsed ? (
           <Eyebrow className="mb-2 px-2">Navigation</Eyebrow>
         ) : null}

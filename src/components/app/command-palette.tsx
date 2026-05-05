@@ -323,7 +323,7 @@ export function CommandPalette({
                 </kbd>
               </div>
 
-              <Command.List className="max-h-[420px] overflow-y-auto p-1.5">
+              <Command.List className="custom-scrollbar max-h-[420px] overflow-y-auto p-1.5">
                 <Command.Empty className="px-3 py-8 text-center text-body-sm text-[var(--text-tertiary)]">
                   No matches.
                 </Command.Empty>
