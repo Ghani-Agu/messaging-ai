@@ -65,16 +65,13 @@ export function AuthCard({
       className="w-full max-w-[420px]"
     >
       <div
-        className="relative overflow-hidden rounded-2xl border border-[var(--border-subtle)] p-8 shadow-[var(--shadow-lg)] backdrop-blur-xl"
+        className="auth-card-orbit relative overflow-hidden rounded-2xl border border-[var(--border-subtle)] p-8 shadow-[var(--shadow-lg)] backdrop-blur-xl"
         style={{ backgroundColor: "color-mix(in oklab, var(--bg-surface) 88%, transparent)" }}
       >
-        {/* Decorative top hairline — slow horizontal shimmer in the accent.
-            Peak alpha travels left-to-right on a 4s loop. Reduced-motion
-            users get the static gradient (see globals.css). */}
-        <div
-          aria-hidden
-          className="auth-card-shimmer pointer-events-none absolute inset-x-0 top-0 h-px"
-        />
+        {/* Decorative perimeter light — a conic-gradient "spot" rotates
+            around the card's 1px ring on a 6s loop, mask-clipped to the
+            border. Reduced-motion users get a static accent gradient
+            across the top edge (see globals.css). */}
 
         <div className="mb-6 flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -169,39 +166,42 @@ export function AuthCard({
 }
 
 /**
- * WBP brand mark — a 40×40 bordered square hosting the WBP logo PNG. If
- * /wbp.png is missing (dev convenience), falls back to a "W" glyph against
- * a subtle elevated surface so the card still reads as a brand mark. Logo
- * path is hardcoded because the auth surfaces are platform-branded
- * (pre-tenant); per-tenant logos resolve via the tenant-brands manifest in
- * the operator app.
+ * WBP brand mark — a 56×56 cell hosting the WBP logo PNG. If /wbp.png is
+ * missing (dev convenience), falls back to a "W" glyph against a subtle
+ * elevated surface so the card still reads as a brand mark. Logo path is
+ * hardcoded because the auth surfaces are platform-branded (pre-tenant);
+ * per-tenant logos resolve via the tenant-brands manifest in the operator
+ * app.
  *
- * No gradient / glow on the wrapper: the prior gradient-square treatment
- * competed with the logo. The container hint is a 1px subtle border only.
+ * Rendered with Next/Image `fill` inside a sized `relative` wrapper so the
+ * intrinsic image dimensions can't collapse the visible size. The wrapper
+ * stays transparent (no border / no surface): the logo on the card's own
+ * surface reads cleanest. The error fallback keeps a soft elevated tile
+ * because a bare letter floating on the card looks unbalanced.
  */
 function BrandMark() {
   const [errored, setErrored] = useState(false);
+  if (errored) {
+    return (
+      <div
+        aria-hidden
+        className="flex h-14 w-14 items-center justify-center rounded-md bg-[var(--bg-surface-elevated)] text-h3 font-semibold text-[var(--text-primary)]"
+      >
+        W
+      </div>
+    );
+  }
   return (
-    <div
-      aria-hidden
-      className={
-        errored
-          ? "flex size-10 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] text-h4 font-semibold text-[var(--text-primary)]"
-          : "flex size-10 items-center justify-center rounded-md border border-[var(--border-subtle)]"
-      }
-    >
-      {errored ? (
-        "W"
-      ) : (
-        <Image
-          src="/wbp.png"
-          alt="WBP"
-          width={32}
-          height={32}
-          priority
-          onError={() => setErrored(true)}
-        />
-      )}
+    <div aria-hidden className="relative h-14 w-14 flex-shrink-0">
+      <Image
+        src="/wbp.png"
+        alt="WBP"
+        fill
+        sizes="56px"
+        priority
+        className="object-contain"
+        onError={() => setErrored(true)}
+      />
     </div>
   );
 }

@@ -283,38 +283,71 @@ body {
 }
 
 /* =========================================================================
-   AuthCard top-edge shimmer — a slow horizontal traveling gradient on the
-   1px hairline. Subtle: peak alpha is ~65% of `--accent-hover`, the rest
-   fades to transparent. The animated `background-position` shifts the
-   200%-wide gradient so the peak appears at the right edge, travels off
-   to the left, and re-enters from the right. 4s cycle keeps it ambient.
+   AuthCard orbiting border light — a conic-gradient "spot" travels around
+   the card's 1px border ring on a 6s loop. The pseudo-element sits at
+   inset:0 inside the parent (parent has overflow:hidden, so we can't bleed
+   outside), padded 1px and mask-clipped via the standard
+   "content-box mask + full mask + xor" trick so only the 1px ring is
+   painted. `isolation: isolate` + `z-index: -1` keeps the ring under the
+   card's content but above its background.
+
+   Animation works by registering `--orbit-angle` as a typed CSS custom
+   property via `@property` so the angle interpolates smoothly across the
+   keyframes. Approach (A) per the polish-round-4 brief; @property is
+   broadly supported across Chrome/Edge 85+, Safari 16.4+, Firefox 128+,
+   so we don't need the background-position fallback (B).
+
+   Conic stops give a ~80°-wide bright arc that slides around the
+   perimeter — narrow enough to read as a moving point of light, wide
+   enough not to flicker. Peak alpha is ~85% of --accent-hover; the
+   gentle 65% shoulders soften the leading/trailing edges. Reduced-motion
+   users get a static horizontal accent beam across the top edge.
    ========================================================================= */
 
-.auth-card-shimmer {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    transparent 30%,
-    color-mix(in oklab, var(--accent-hover) 65%, transparent) 50%,
-    transparent 70%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  background-repeat: no-repeat;
-  animation: auth-card-shimmer 4s ease-in-out infinite;
+@property --orbit-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
 }
 
-@keyframes auth-card-shimmer {
-  0% {
-    background-position: 200% 0;
-  }
-  100% {
-    background-position: -100% 0;
+.auth-card-orbit {
+  position: relative;
+  isolation: isolate;
+}
+
+.auth-card-orbit::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--orbit-angle, 0deg),
+    transparent 0deg,
+    transparent 280deg,
+    color-mix(in oklab, var(--accent-hover) 65%, transparent) 320deg,
+    color-mix(in oklab, var(--accent-hover) 85%, transparent) 340deg,
+    color-mix(in oklab, var(--accent-hover) 65%, transparent) 358deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: auth-card-orbit 6s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes auth-card-orbit {
+  to {
+    --orbit-angle: 360deg;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .auth-card-shimmer {
+  .auth-card-orbit::before {
     animation: none;
     background: linear-gradient(
       90deg,
@@ -322,6 +355,5 @@ body {
       color-mix(in oklab, var(--accent-hover) 60%, transparent),
       transparent
     );
-    background-size: 100% 100%;
   }
 }

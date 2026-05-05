@@ -141,9 +141,11 @@ export function WorkspaceSwitcher({
  * competes with the logo). Otherwise, falls back to a gradient square with
  * the tenant initial so there's still a visual anchor for the brand block.
  *
- * The wrapper is fixed-size (size-9 expanded / size-7 collapsed) with
- * object-contain on the Image so an off-square logo aspect ratio stays
- * within a predictable cell and aligns with the workspace name text.
+ * The wrapper is fixed-size (h-12 w-12 expanded / h-10 w-10 collapsed). We
+ * use Next/Image's `fill` mode inside a `relative` sized box so the logo's
+ * intrinsic dimensions can't collapse the visible size — passing
+ * width/height props lets a small intrinsic size leak through and the
+ * picture renders smaller than the cell.
  *
  * `onError` swap covers the dev case where the manifest opted in but the
  * PNG hasn't been dropped into `public/` yet.
@@ -161,23 +163,20 @@ function BrandSquare({
 }) {
   const [errored, setErrored] = useState(false);
   const showLogo = hasBrandLogo && !errored;
-  const sizeClass = compact ? "size-7" : "size-9";
+  const sizeClass = compact ? "h-10 w-10" : "h-12 w-12";
 
   if (showLogo) {
     return (
       <span
         aria-hidden
-        className={cn(
-          "flex shrink-0 items-center justify-center overflow-hidden",
-          sizeClass,
-        )}
+        className={cn("relative flex shrink-0 overflow-hidden", sizeClass)}
       >
         <Image
           src={`/${slug}.png`}
           alt={`${name} logo`}
-          width={compact ? 28 : 36}
-          height={compact ? 28 : 36}
-          className="size-full object-contain"
+          fill
+          sizes={compact ? "40px" : "48px"}
+          className="object-contain"
           onError={() => setErrored(true)}
         />
       </span>
@@ -188,7 +187,7 @@ function BrandSquare({
     <span
       aria-hidden
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-md text-body-sm font-semibold text-white",
+        "flex shrink-0 items-center justify-center rounded-md text-body font-semibold text-white",
         sizeClass,
       )}
       style={{ background: "var(--gradient-primary)" }}
