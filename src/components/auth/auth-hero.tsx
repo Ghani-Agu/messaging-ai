@@ -29,12 +29,12 @@ export function AuthHero() {
 
       <FadeInItem>
         <h2 className="mt-8 max-w-xl text-display text-[var(--text-primary)]">
-          AI that handles every customer inquiry,{" "}
+          Welcome to{" "}
           <span
             className="bg-clip-text text-transparent"
             style={{ backgroundImage: "var(--gradient-primary)" }}
           >
-            in your voice
+            WBP AI
           </span>
           .
         </h2>

@@ -102,7 +102,7 @@ model Tenant {
   slug             String       @unique
   name             String
   logoUrl          String?
-  accentColor      String? // hex; falls back to design-system violet at the app layer
+  accentColor      String? // hex; falls back to the platform-default accent at the app layer
   plan             Plan         @default(FREE)
   stripeCustomerId String?      @unique
   settings         Json         @default("{}")

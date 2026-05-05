@@ -27,10 +27,10 @@ export const tokens = {
     "disabled": "#52525B"
   },
   "accent": {
-    "base": "#7C3AED",
-    "hover": "#8B5CF6",
-    "active": "#6D28D9",
-    "glow": "rgba(124, 58, 237, 0.35)"
+    "base": "#EA580C",
+    "hover": "#F97316",
+    "active": "#C2410C",
+    "glow": "rgba(234, 88, 12, 0.35)"
   },
   "status": {
     "success": "#10B981",
@@ -47,7 +47,7 @@ export const tokens = {
   "shadow": {
     "md": "0 4px 12px rgba(0,0,0,0.5)",
     "lg": "0 12px 32px rgba(0,0,0,0.55)",
-    "glow": "0 0 32px rgba(124, 58, 237, 0.35)"
+    "glow": "0 0 32px rgba(234, 88, 12, 0.35)"
   },
   "motion": {
     "easeStandard": "cubic-bezier(0.4, 0, 0.2, 1)",

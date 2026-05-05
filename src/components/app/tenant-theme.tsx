@@ -6,7 +6,7 @@ import { accentColorSchema } from "@/lib/tenant-themes";
 /**
  * Per-tenant theme scope. Wraps the operator-app subtree in a div carrying
  * `data-tenant="<slug>"`, and (when accentColor is set + valid) emits a
- * scoped <style> block that overrides the violet accent family for this
+ * scoped <style> block that overrides the platform accent family for this
  * tenant only. Global token defaults are frozen — this is the single
  * sanctioned override surface.
  *

@@ -25,10 +25,10 @@ export const colors = {
     disabled: "#52525B",
   },
   accent: {
-    base: "#7C3AED",
-    hover: "#8B5CF6",
-    active: "#6D28D9",
-    glow: "rgba(124, 58, 237, 0.35)",
+    base: "#EA580C",
+    hover: "#F97316",
+    active: "#C2410C",
+    glow: "rgba(234, 88, 12, 0.35)",
     secondary: "#06B6D4",
   },
   semantic: {
@@ -68,9 +68,9 @@ export const typography = {
 } as const;
 
 export const gradients = {
-  primary: "linear-gradient(135deg, #7C3AED 0%, #06B6D4 100%)",
+  primary: "linear-gradient(135deg, #EA580C 0%, #06B6D4 100%)",
   mesh:
-    "radial-gradient(at 27% 37%, hsla(265,75%,55%,0.18) 0px, transparent 50%)," +
+    "radial-gradient(at 27% 37%, hsla(20,90%,55%,0.18) 0px, transparent 50%)," +
     "radial-gradient(at 97% 21%, hsla(189,75%,55%,0.12) 0px, transparent 50%)," +
-    "radial-gradient(at 52% 99%, hsla(280,75%,55%,0.10) 0px, transparent 50%)",
+    "radial-gradient(at 52% 99%, hsla(15,90%,55%,0.10) 0px, transparent 50%)",
 } as const;

@@ -163,22 +163,26 @@ export function AuthCard({
 }
 
 /**
- * WBP brand mark — a 40×40 gradient square hosting the WBP logo PNG. If
- * /wbp.png is missing (dev convenience), falls back to a "W" glyph so the
- * card still renders. Logo path is hardcoded because the auth surfaces
- * are platform-branded (pre-tenant); per-tenant logos resolve via the
- * tenant-brands manifest in the operator app.
+ * WBP brand mark — a 40×40 bordered square hosting the WBP logo PNG. If
+ * /wbp.png is missing (dev convenience), falls back to a "W" glyph against
+ * a subtle elevated surface so the card still reads as a brand mark. Logo
+ * path is hardcoded because the auth surfaces are platform-branded
+ * (pre-tenant); per-tenant logos resolve via the tenant-brands manifest in
+ * the operator app.
+ *
+ * No gradient / glow on the wrapper: the prior gradient-square treatment
+ * competed with the logo. The container hint is a 1px subtle border only.
  */
 function BrandMark() {
   const [errored, setErrored] = useState(false);
   return (
     <div
       aria-hidden
-      className="flex size-10 items-center justify-center rounded-md text-h4 font-semibold text-white"
-      style={{
-        background: "var(--gradient-primary)",
-        boxShadow: "var(--shadow-glow)",
-      }}
+      className={
+        errored
+          ? "flex size-10 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] text-h4 font-semibold text-[var(--text-primary)]"
+          : "flex size-10 items-center justify-center rounded-md border border-[var(--border-subtle)]"
+      }
     >
       {errored ? (
         "W"

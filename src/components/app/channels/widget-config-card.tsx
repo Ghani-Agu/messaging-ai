@@ -251,7 +251,7 @@ function FieldThemeAccent({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        placeholder="#7C3AED"
+        placeholder="#EA580C"
         aria-invalid={error ? true : undefined}
         className={cn(
           "block h-10 w-full max-w-md rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3 text-body text-[var(--text-primary)]",
@@ -263,8 +263,8 @@ function FieldThemeAccent({
         )}
       />
       <p className="mt-1.5 text-body-sm text-[var(--text-tertiary)]">
-        Hex / hsl / oklch — overrides the widget&rsquo;s default violet on this
-        tenant&rsquo;s embeds. Leave blank to use the platform default.
+        Hex / hsl / oklch — overrides the widget&rsquo;s default accent on
+        this tenant&rsquo;s embeds. Leave blank to use the platform default.
       </p>
       {error ? (
         <p role="alert" className="mt-1.5 text-body-sm text-[var(--danger)]">

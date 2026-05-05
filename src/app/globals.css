@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* =========================================================================
-   Design tokens — Direction A: Linear-inspired, electric violet on charcoal.
+   Design tokens — Direction A: Linear-inspired, platform orange on charcoal.
    Source of truth: MASTER_PLAN.md §4. Do not hard-code these values anywhere
    else in the app.
    ========================================================================= */
@@ -25,11 +25,11 @@
   --text-tertiary: #71717a;
   --text-disabled: #52525b;
 
-  /* Accent (electric violet) */
-  --accent-base: #7c3aed;
-  --accent-hover: #8b5cf6;
-  --accent-active: #6d28d9;
-  --accent-glow: rgba(124, 58, 237, 0.35);
+  /* Accent (platform orange) */
+  --accent-base: #ea580c;
+  --accent-hover: #f97316;
+  --accent-active: #c2410c;
+  --accent-glow: rgba(234, 88, 12, 0.35);
   --accent-secondary: #06b6d4;
 
   /* Semantic */
@@ -38,11 +38,11 @@
   --danger: #ef4444;
 
   /* Gradients */
-  --gradient-primary: linear-gradient(135deg, #7c3aed 0%, #06b6d4 100%);
+  --gradient-primary: linear-gradient(135deg, #ea580c 0%, #06b6d4 100%);
   --gradient-mesh:
-    radial-gradient(at 27% 37%, hsla(265, 75%, 55%, 0.18) 0px, transparent 50%),
+    radial-gradient(at 27% 37%, hsla(20, 90%, 55%, 0.18) 0px, transparent 50%),
     radial-gradient(at 97% 21%, hsla(189, 75%, 55%, 0.12) 0px, transparent 50%),
-    radial-gradient(at 52% 99%, hsla(280, 75%, 55%, 0.1) 0px, transparent 50%);
+    radial-gradient(at 52% 99%, hsla(15, 90%, 55%, 0.1) 0px, transparent 50%);
 
   /* Radius */
   --radius-sm: 6px;
@@ -76,21 +76,21 @@
   --text-tertiary: #71717a;
   --text-disabled: #a1a1aa;
 
-  --accent-base: #6d28d9;
-  --accent-hover: #7c3aed;
-  --accent-active: #5b21b6;
-  --accent-glow: rgba(109, 40, 217, 0.25);
+  --accent-base: #c2410c;
+  --accent-hover: #ea580c;
+  --accent-active: #9a3412;
+  --accent-glow: rgba(194, 65, 12, 0.25);
   --accent-secondary: #0891b2;
 
   --success: #059669;
   --warning: #d97706;
   --danger: #dc2626;
 
-  --gradient-primary: linear-gradient(135deg, #6d28d9 0%, #0891b2 100%);
+  --gradient-primary: linear-gradient(135deg, #c2410c 0%, #0891b2 100%);
   --gradient-mesh:
-    radial-gradient(at 27% 37%, hsla(265, 75%, 55%, 0.1) 0px, transparent 50%),
+    radial-gradient(at 27% 37%, hsla(20, 90%, 55%, 0.1) 0px, transparent 50%),
     radial-gradient(at 97% 21%, hsla(189, 75%, 55%, 0.08) 0px, transparent 50%),
-    radial-gradient(at 52% 99%, hsla(280, 75%, 55%, 0.06) 0px, transparent 50%);
+    radial-gradient(at 52% 99%, hsla(15, 90%, 55%, 0.06) 0px, transparent 50%);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);

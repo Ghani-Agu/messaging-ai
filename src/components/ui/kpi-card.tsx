@@ -30,7 +30,7 @@ export interface KpiCardProps
 
 /**
  * KPI tile. Used in the dashboard's headline metrics row. Active variant
- * gets the orange/violet glow, an inset accent shadow, and a corner radial
+ * gets the accent glow, an inset accent shadow, and a corner radial
  * "spotlight" gradient that picks up the per-tenant accent automatically.
  */
 export const KpiCard = forwardRef<HTMLDivElement, KpiCardProps>(

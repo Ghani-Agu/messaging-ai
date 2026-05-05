@@ -86,7 +86,7 @@ export default function DemoPage() {
         <section className="mt-32">
           <SectionHeader
             eyebrow="Color"
-            title="Direction A — electric violet on charcoal"
+            title="Direction A — platform orange on charcoal"
             description="Tokens drive everything. Hard-coded hex codes are a code smell."
           />
 

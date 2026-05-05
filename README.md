@@ -109,7 +109,7 @@ Future-phase directories (`src/server/auth`, `src/server/ai`, `src/server/channe
 
 ## Design system
 
-Direction A — Linear-inspired. Deep charcoal base (`#0A0A0B`), electric violet accent (`#7C3AED`), Geist fonts, dark default with light parity. Tokens live in `src/app/globals.css` (CSS variables surfaced as Tailwind v4 utilities via `@theme inline`) and as TS constants in `src/lib/design-tokens.ts`.
+Direction A — Linear-inspired. Deep charcoal base (`#0A0A0B`), platform orange accent (`#EA580C`), Geist fonts, dark default with light parity. Tokens live in `src/app/globals.css` (CSS variables surfaced as Tailwind v4 utilities via `@theme inline`) and as TS constants in `src/lib/design-tokens.ts`.
 
 Hard rule: never hard-code colors, font sizes, spacing, or motion values. Always use the tokens. (See `MASTER_PLAN.md` §13.)
 

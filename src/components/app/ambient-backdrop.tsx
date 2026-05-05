@@ -5,8 +5,9 @@ import { motion, useReducedMotion } from "framer-motion";
 /**
  * Operator-app ambient backdrop. Same shape as AuthMeshBackdrop (corner
  * radial blobs + edge vignette), but mounted inside the per-tenant
- * [data-tenant=…] wrapper, so the violet `--accent-base` resolves to the
- * tenant's override (orange for wbp, etc.) without any prop wiring.
+ * [data-tenant=…] wrapper, so `--accent-base` resolves to the tenant's
+ * override when one is set (and falls through to the platform default
+ * orange otherwise) without any prop wiring.
  *
  * `tenantTinted` is a marker for intent — the visual difference is driven
  * automatically by CSS-variable scoping. Off-tenant call sites should pass

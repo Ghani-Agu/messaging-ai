@@ -11,7 +11,7 @@ Operating instructions for Claude Code working on `messaging-ai`.
 Read it in full at the start of every session before writing any code. Specifically know:
 
 - §3 — locked tech stack (no substitutions without explicit approval)
-- §4 — design system (Direction A: Linear-inspired, dark default, electric violet `#7C3AED`)
+- §4 — design system (Direction A: Linear-inspired, dark default, platform orange `#EA580C`)
 - §5 — folder structure
 - §6 — full v1 database schema
 - §9 — phase-by-phase deliverables and acceptance criteria

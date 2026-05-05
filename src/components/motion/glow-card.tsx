@@ -8,7 +8,7 @@ import { durationFast, easeOutExpo } from "@/lib/motion";
 interface GlowCardProps {
   children: ReactNode;
   className?: string;
-  /** Strength of the violet halo on hover. 0–1, default 0.6. */
+  /** Strength of the accent halo on hover. 0–1, default 0.6. */
   intensity?: number;
 }
 
@@ -19,6 +19,10 @@ interface GlowCardProps {
 export function GlowCard({ children, className, intensity = 0.6 }: GlowCardProps) {
   const mouseX = useMotionValue(0);
   const mouseY = useMotionValue(0);
+  // intensity drives an alpha mix against `transparent` — color-mix at N%
+  // against transparent yields the accent at N% alpha. 25% at intensity=1
+  // matches the prior rgba(…, 0.25) feel.
+  const mixPct = Math.max(0, Math.min(1, intensity)) * 25;
 
   const handleMouseMove = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
@@ -29,7 +33,7 @@ export function GlowCard({ children, className, intensity = 0.6 }: GlowCardProps
     [mouseX, mouseY],
   );
 
-  const background = useMotionTemplate`radial-gradient(420px circle at ${mouseX}px ${mouseY}px, rgba(124, 58, 237, ${intensity * 0.25}), transparent 70%)`;
+  const background = useMotionTemplate`radial-gradient(420px circle at ${mouseX}px ${mouseY}px, color-mix(in oklab, var(--accent-base) ${mixPct}%, transparent), transparent 70%)`;
 
   return (
     <motion.div

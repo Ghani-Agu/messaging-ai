@@ -3,7 +3,7 @@
 **Project:** Multi-channel AI Messaging SaaS (working name: `messaging-ai`)
 **Owner:** Project lead (you)
 **Build assistant:** Claude Code (this document is the persistent source of truth across all sessions)
-**Last updated:** Day 1 — end of Phase 1 (foundation). One deviation from §5 recorded with project-lead approval: Tailwind v4 is configured CSS-first via `@theme inline` in `src/app/globals.css`; there is no `tailwind.config.ts`.
+**Last updated:** Phase 11 polish round 2 (2026-05-05) — §4 platform accent retoned from electric violet (`#7C3AED`) to platform orange (`#EA580C`); the cyan secondary stays. Per-tenant overrides via `TenantThemeProvider` and the `Tenant.accentColor` column continue to work unchanged. Earlier deviation from §5 still active: Tailwind v4 is configured CSS-first via `@theme inline` in `src/app/globals.css`; there is no `tailwind.config.ts`.
 
 ---
 
@@ -141,18 +141,18 @@ All colors defined as CSS variables in `:root` and `[data-theme="dark"]`. Defaul
 | `--text-secondary` | `#A1A1AA` | Secondary text |
 | `--text-tertiary` | `#71717A` | Tertiary text, placeholders |
 | `--text-disabled` | `#52525B` | Disabled |
-| `--accent-base` | `#7C3AED` | Primary action (electric violet) |
-| `--accent-hover` | `#8B5CF6` | Primary hover |
-| `--accent-active` | `#6D28D9` | Primary pressed |
-| `--accent-glow` | `rgba(124, 58, 237, 0.35)` | Glow effects |
+| `--accent-base` | `#EA580C` | Primary action (platform orange) |
+| `--accent-hover` | `#F97316` | Primary hover |
+| `--accent-active` | `#C2410C` | Primary pressed |
+| `--accent-glow` | `rgba(234, 88, 12, 0.35)` | Glow effects |
 | `--accent-secondary` | `#06B6D4` | Cyan secondary accent (sparingly) |
 | `--success` | `#10B981` | Success states |
 | `--warning` | `#F59E0B` | Warning states |
 | `--danger` | `#EF4444` | Error/destructive |
-| `--gradient-primary` | `linear-gradient(135deg, #7C3AED 0%, #06B6D4 100%)` | Hero gradients, key CTAs |
-| `--gradient-mesh` | `radial-gradient(at 27% 37%, hsla(265,75%,55%,0.18) 0px, transparent 50%), radial-gradient(at 97% 21%, hsla(189,75%,55%,0.12) 0px, transparent 50%), radial-gradient(at 52% 99%, hsla(280,75%,55%,0.10) 0px, transparent 50%)` | Login/onboarding backgrounds |
+| `--gradient-primary` | `linear-gradient(135deg, #EA580C 0%, #06B6D4 100%)` | Hero gradients, key CTAs |
+| `--gradient-mesh` | `radial-gradient(at 27% 37%, hsla(20,90%,55%,0.18) 0px, transparent 50%), radial-gradient(at 97% 21%, hsla(189,75%,55%,0.12) 0px, transparent 50%), radial-gradient(at 52% 99%, hsla(15,90%,55%,0.10) 0px, transparent 50%)` | Login/onboarding backgrounds |
 
-**Light theme:** designed but not the default. Mirror of dark with inverted neutrals; accent stays violet but slightly darker (`#6D28D9`) for contrast.
+**Light theme:** designed but not the default. Mirror of dark with inverted neutrals; accent stays in the orange family but slightly darker (`#C2410C`) for contrast.
 
 ### Typography
 

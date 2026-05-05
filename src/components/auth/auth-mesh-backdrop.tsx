@@ -9,9 +9,10 @@ import { motion, useReducedMotion } from "framer-motion";
  * Three layers, all `pointer-events-none` and behind page content:
  *   1. The base `--gradient-mesh` token (theme-aware), static.
  *   2. Two large radial blobs anchored just outside opposite corners
- *      (top-right violet, bottom-left cyan-secondary). They breathe in
- *      opacity on independent loops with offset phases so the result
- *      reads as a calm ambient drift, not a coordinated pulse.
+ *      (top-right `--accent-base`, bottom-left `--accent-secondary`).
+ *      They breathe in opacity on independent loops with offset phases
+ *      so the result reads as a calm ambient drift, not a coordinated
+ *      pulse.
  *   3. A radial vignette that fades the edges into `--bg-base` so the
  *      blobs don't compete with content.
  *
@@ -38,7 +39,7 @@ export function AuthMeshBackdrop() {
         style={{ background: "var(--gradient-mesh)" }}
       />
 
-      {/* Top-right violet glow — anchored just outside the corner so only
+      {/* Top-right accent glow — anchored just outside the corner so only
           the spill lands inside the viewport. */}
       <motion.div
         aria-hidden
@@ -62,7 +63,7 @@ export function AuthMeshBackdrop() {
         }
       />
 
-      {/* Bottom-left cyan-secondary glow — offset phase from the violet
+      {/* Bottom-left cyan-secondary glow — offset phase from the accent
           one so the two never breathe in sync. */}
       <motion.div
         aria-hidden
