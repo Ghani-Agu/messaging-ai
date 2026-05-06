@@ -97,6 +97,19 @@ enum ItemAvailability {
   UNKNOWN
 }
 
+enum LiveDataSourceType {
+  ODOO
+  // Reserved for future commits: SHOPIFY, WOOCOMMERCE, MANUAL_CSV,
+  // GOOGLE_SHEETS, WEBHOOK
+}
+
+enum LiveDataSourceStatus {
+  PENDING_TEST
+  CONNECTED
+  ERROR
+  DISCONNECTED
+}
+
 model Tenant {
   id               String       @id @default(cuid())
   slug             String       @unique
@@ -121,6 +134,7 @@ model Tenant {
   customers        Customer[]
   conversations    Conversation[]
   messages         Message[]
+  liveDataSources  LiveDataSource[]
 
   @@index([slug])
 }
@@ -507,18 +521,42 @@ model KnowledgeItem {
   // Phase 8 freshness signal — same semantics as KnowledgeSource.lastVerifiedAt:
   // operator-asserted "still correct," distinct from updatedAt.
   lastVerifiedAt DateTime?
+  // ── Live Data Source sync fields (Live Data feature, 2026-05-06) ──
+  // When this item was sourced from an ERP poll (e.g. Odoo), liveDataSourceId
+  // points at the LiveDataSource row that owns the row's lifecycle and
+  // (sourceUpdatedAt, lastSyncedAt) carry the upstream-vs-local provenance.
+  // Manual entries leave all four fields null. SetNull on delete keeps the
+  // KnowledgeItem rows in place if the operator disconnects the source —
+  // they become "frozen" data the brain can still use until manually deleted
+  // or re-attached. lastSyncedAt is the auto-sync timestamp; lastVerifiedAt
+  // is the operator-asserted "still correct" timestamp — both kept since
+  // they answer different questions.
+  liveDataSourceId  String?
+  sourceUpdatedAt   DateTime?
+  lastSyncedAt      DateTime?
+  quantityOnHand    Int?
+  quantityAvailable Int?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  liveDataSource LiveDataSource? @relation(fields: [liveDataSourceId], references: [id], onDelete: SetNull)
 
-  // Re-imports against an external system dedupe by (tenantId, externalId).
-  // NULL externalIds (manual entries) are allowed in any quantity per
-  // Postgres NULLS-DISTINCT default.
+  // Re-imports against an external system dedupe on (tenantId, externalId)
+  // for manual entries — NULL liveDataSourceId rows. NULL externalIds (no
+  // upstream id) are allowed in any quantity per Postgres NULLS-DISTINCT.
   @@unique([tenantId, externalId])
+  // Synced rows scope their externalId by their owning source. If an
+  // operator manually creates an item with the same externalId that Odoo
+  // later returns for the same source, the manual-entry unique above
+  // surfaces the collision as an upsert error during sync — explicit
+  // failure over silent overwrite. The operator must delete or rename
+  // one row to resolve.
+  @@unique([tenantId, liveDataSourceId, externalId])
   @@index([tenantId, category])
   @@index([tenantId, name])
   @@index([tenantId, createdAt(sort: Desc)])
+  @@index([liveDataSourceId])
   // Lexical full-text index on the GENERATED searchVector. The HNSW index
   // on `embedding` cannot be expressed in PSL; it lives as raw SQL in the
   // migration alongside the GIN index below.
@@ -630,4 +668,48 @@ model KnowledgeGap {
   // Cluster lookup: WHERE tenantId=? AND clusterKey=?
   @@index([tenantId, clusterKey])
   @@index([conversationId])
+}
+
+// =====================================================================
+// Live Data Sources (Live Data feature, 2026-05-06)
+//
+// Polling-based ERP / catalog connectors that auto-populate KnowledgeItem
+// rows. ODOO is the only adapter today; SHOPIFY / WOOCOMMERCE / MANUAL_CSV
+// / GOOGLE_SHEETS / WEBHOOK are reserved on the type enum and land in
+// future commits without touching this layer.
+//
+// Credentials live in `encryptedConfig` — AES-256-GCM ciphertext (base64)
+// produced by src/server/integrations/crypto.ts. Plaintext only ever
+// materializes inside the adapter at the moment of XML-RPC auth; never
+// in logs, API responses, or error messages.
+// =====================================================================
+
+model LiveDataSource {
+  id                String               @id @default(cuid())
+  tenantId          String
+  type              LiveDataSourceType
+  // Operator-supplied label for the dashboard ("Production Odoo").
+  name              String
+  // Base64 AES-256-GCM blob (iv ‖ authTag ‖ ciphertext) of the config JSON.
+  // Decryption requires LIVE_DATA_ENCRYPTION_KEY. Never logged.
+  encryptedConfig   String
+  status            LiveDataSourceStatus @default(PENDING_TEST)
+  // Set on every successful sync completion.
+  lastSyncedAt      DateTime?
+  // Set when a sync run starts; cleared on completion (success or error).
+  // Used by the dispatch's stuck-sync watchdog (>30min triggers re-attempt).
+  lastSyncStartedAt DateTime?
+  // Last failure message; cleared on next successful sync. Surfaced inline
+  // on the source-card error state in the dashboard.
+  lastSyncError     String?
+  // Cumulative count of upserts across all sync runs. Diagnostic only.
+  syncedRecordCount Int                  @default(0)
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items  KnowledgeItem[]
+
+  @@index([tenantId])
+  @@index([status])
 }
