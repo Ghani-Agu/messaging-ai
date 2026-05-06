@@ -49,6 +49,7 @@ export async function POST(request: Request): Promise<Response> {
     reason?: string;
     recordsProcessed?: number;
     durationMs?: number;
+    embeddingsFailed?: number;
     error?: string;
   }> = [];
 
@@ -70,6 +71,7 @@ export async function POST(request: Request): Promise<Response> {
         skipped: false,
         recordsProcessed: result.recordsProcessed,
         durationMs: result.durationMs,
+        embeddingsFailed: result.embeddingsFailed,
       });
     } catch (err) {
       results.push({

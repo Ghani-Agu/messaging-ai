@@ -2,10 +2,12 @@ import "server-only";
 
 import type {
   ItemAvailability,
+  KnowledgeItem,
   LiveDataSource,
   Prisma,
 } from "@prisma/client";
 import { prisma } from "@/server/db/client";
+import { embedKnowledgeItem } from "@/server/knowledge/embed-item";
 import { decryptConfig } from "../crypto";
 import { OdooClient } from "./client";
 import { OdooConfigSchema, type OdooConfig } from "./config-schema";
@@ -60,6 +62,16 @@ export type SyncResult = {
   recordsProcessed: number;
   durationMs: number;
   isDelta: boolean;
+  /**
+   * Items whose row upsert succeeded but whose embedding step failed
+   * (e.g. transient Voyage 5xx that exhausted the OpenAI fallback). The
+   * row is in place; only its vector is missing. The backfill script
+   * (`embeddings:backfill`) picks these up on the next run because they
+   * land in `KnowledgeItem` with `embedding IS NULL`. Surfaced here so
+   * the cron observer can spot a sustained failure spike without diving
+   * into per-row logs.
+   */
+  embeddingsFailed: number;
 };
 
 export async function syncOdooProducts(
@@ -100,6 +112,7 @@ export async function syncOdooProducts(
   });
 
   let totalProcessed = 0;
+  let embeddingsFailed = 0;
   let offset = 0;
 
   try {
@@ -135,13 +148,30 @@ export async function syncOdooProducts(
           });
           continue;
         }
-        await upsertItem(
+        const upserted = await upsertItem(
           source,
           result.data,
           config,
           raw as Record<string, unknown>,
         );
         totalProcessed++;
+        // Embedding is best-effort within the sync. A transient provider
+        // 5xx that exhausts both Voyage and the OpenAI fallback should
+        // not abort the rest of the batch — the row is already in place,
+        // and the backfill script picks up `embedding IS NULL` rows on
+        // its next run. TODO(perf): if 1.7K-item full syncs become a
+        // recurring pattern, batch embeddings per page (200) instead of
+        // per item. embed() naturally takes arrays; the per-item shape
+        // here keeps error isolation simple.
+        try {
+          await embedKnowledgeItem(upserted);
+        } catch (err) {
+          embeddingsFailed++;
+          console.warn(
+            `Failed to embed item ${upserted.id} during sync: ` +
+              (err instanceof Error ? err.message : "unknown"),
+          );
+        }
       }
 
       if (rawRecords.length < PAGE_SIZE) break;
@@ -163,6 +193,7 @@ export async function syncOdooProducts(
       recordsProcessed: totalProcessed,
       durationMs: Date.now() - startedAt,
       isDelta,
+      embeddingsFailed,
     };
   } catch (err) {
     await prisma.liveDataSource.update({
@@ -201,7 +232,7 @@ async function upsertItem(
   product: OdooProductTemplate,
   config: OdooConfig,
   raw: Record<string, unknown>,
-): Promise<void> {
+): Promise<KnowledgeItem> {
   const externalId = String(product.id);
   const sku = product.default_code === false ? null : product.default_code;
   const description =
@@ -248,7 +279,7 @@ async function upsertItem(
   // Use the (tenantId, liveDataSourceId, externalId) composite — synced
   // rows always carry a non-null liveDataSourceId so this never collides
   // with manual entries (which use the (tenantId, externalId) unique).
-  await prisma.knowledgeItem.upsert({
+  return prisma.knowledgeItem.upsert({
     where: {
       tenantId_liveDataSourceId_externalId: {
         tenantId: source.tenantId,

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
-import type { LiveDataSource } from "@prisma/client";
+import type { KnowledgeItem, LiveDataSource } from "@prisma/client";
 import { encryptConfig } from "../../crypto";
 
 // Hoisted mocks: OdooClient is replaced with a programmable stub, and
@@ -44,6 +44,14 @@ vi.mock("@/server/db/client", () => ({
     knowledgeItem: { upsert: upsertMock },
     liveDataSource: { update: updateMock },
   },
+}));
+
+// Mock the embed helper so the sync test never hits Voyage / OpenAI / pg.
+const embedItemMock = vi.hoisted(() =>
+  vi.fn<(item: KnowledgeItem) => Promise<void>>(),
+);
+vi.mock("@/server/knowledge/embed-item", () => ({
+  embedKnowledgeItem: embedItemMock,
 }));
 
 const VALID_KEY = randomBytes(32).toString("base64");
@@ -110,10 +118,39 @@ describe("syncOdooProducts", () => {
     executeKwMock.mockReset();
     upsertMock.mockReset();
     updateMock.mockReset();
+    embedItemMock.mockReset();
 
     authenticateMock.mockResolvedValue(7);
-    upsertMock.mockResolvedValue({});
+    // Return a minimally-shaped KnowledgeItem row so embedKnowledgeItem
+    // can be called against it. The id is what the embed call key off
+    // of; fields are filler for the type.
+    upsertMock.mockImplementation(async (args) => {
+      const a = args as { create: { externalId?: string; tenantId: string } };
+      return {
+        id: `item_${a.create.externalId ?? "x"}`,
+        tenantId: a.create.tenantId,
+        name: "stub",
+        category: null,
+        externalId: a.create.externalId ?? null,
+        sku: null,
+        brand: null,
+        currency: null,
+        priceCents: null,
+        availability: "UNKNOWN",
+        description: null,
+        specs: {},
+        lastVerifiedAt: null,
+        liveDataSourceId: null,
+        sourceUpdatedAt: null,
+        lastSyncedAt: null,
+        quantityOnHand: null,
+        quantityAvailable: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+    });
     updateMock.mockResolvedValue({});
+    embedItemMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -333,5 +370,67 @@ describe("syncOdooProducts", () => {
     for (const blob of allUpdateData) {
       expect(blob).not.toContain("pw-do-not-leak-12345");
     }
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Embedding wiring (Live Data freshness — make synced items retrievable)
+  // ───────────────────────────────────────────────────────────────────────
+
+  it("calls embedKnowledgeItem once per successful upsert", async () => {
+    searchReadMock.mockResolvedValueOnce([
+      buildOdooProduct(),
+      buildOdooProduct({ id: 102 }),
+      buildOdooProduct({ id: 103 }),
+    ]);
+    const result = await syncOdooProducts(buildSource());
+    expect(upsertMock).toHaveBeenCalledTimes(3);
+    expect(embedItemMock).toHaveBeenCalledTimes(3);
+    expect(result.embeddingsFailed).toBe(0);
+  });
+
+  it("does not call embedKnowledgeItem for records that fail Zod validation", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    searchReadMock.mockResolvedValueOnce([
+      buildOdooProduct(),
+      { id: 999, partial: true }, // schema-fail; skipped
+      buildOdooProduct({ id: 102 }),
+    ]);
+    await syncOdooProducts(buildSource());
+    expect(upsertMock).toHaveBeenCalledTimes(2);
+    expect(embedItemMock).toHaveBeenCalledTimes(2);
+    warnSpy.mockRestore();
+  });
+
+  it("embedding failure is logged but does not abort the sync", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    embedItemMock
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("voyage 503 + openai down"))
+      .mockResolvedValueOnce(undefined);
+
+    searchReadMock.mockResolvedValueOnce([
+      buildOdooProduct({ id: 1 }),
+      buildOdooProduct({ id: 2 }),
+      buildOdooProduct({ id: 3 }),
+    ]);
+    const result = await syncOdooProducts(buildSource());
+    // All three rows still upserted.
+    expect(upsertMock).toHaveBeenCalledTimes(3);
+    expect(result.recordsProcessed).toBe(3);
+    expect(result.embeddingsFailed).toBe(1);
+    // Warning logged for the failed item; password from the source config
+    // never leaks into the warning.
+    expect(warnSpy).toHaveBeenCalled();
+    const warnings = warnSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(warnings).toMatch(/Failed to embed item .+ during sync: voyage 503/);
+    expect(warnings).not.toContain("pw-do-not-leak-12345");
+    warnSpy.mockRestore();
+  });
+
+  it("embeddingsFailed counter starts at 0 when all embeddings succeed", async () => {
+    searchReadMock.mockResolvedValueOnce([buildOdooProduct()]);
+    const result = await syncOdooProducts(buildSource());
+    expect(result.embeddingsFailed).toBe(0);
+    expect(embedItemMock).toHaveBeenCalledTimes(1);
   });
 });

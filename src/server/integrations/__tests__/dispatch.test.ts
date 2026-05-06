@@ -1,5 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { LiveDataSource } from "@prisma/client";
+
+// dispatch.ts → odoo/sync.ts → knowledge/embed-item.ts → db/items.ts →
+// queue/jobs.ts → queue/queues.ts, which calls `new Queue(...)` at
+// module-load against REDIS_URL. We only exercise the pure isDueForSync
+// helper here, so short-circuit the queue import the same way
+// typed-knowledge.test.ts does.
+vi.mock("@/server/queue/jobs", () => ({
+  enqueueEmbedItems: vi.fn(async () => {}),
+  enqueueEmbedQna: vi.fn(async () => {}),
+  enqueueEmbedKnowledgeGap: vi.fn(async () => {}),
+}));
+
 import { isDueForSync } from "../dispatch";
 
 // Helpers — assemble a LiveDataSource record with sensible defaults.
