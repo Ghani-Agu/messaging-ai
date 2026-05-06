@@ -67,13 +67,17 @@ plaintext produce different ciphertexts. Verified by
 For dev setup, credential rotation, or bulk imports, use the
 stdin-piped CLI helper:
 
+Run the script via `npm run live-data:insert -- <flags>` (the npm
+script handles `dotenv` + `--conditions=react-server` for the
+`server-only` modules the script imports).
+
 **PowerShell:**
 
 ```powershell
 $pw = Read-Host -AsSecureString "Password"
 $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
   [Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw))
-echo $plain | npx tsx scripts/insert-live-data-source.ts `
+echo $plain | npm run live-data:insert -- `
   --tenant-slug wbp --type ODOO --name "WBP Production Odoo" `
   --url https://wbp.tayssir-erp.dz `
   --database wbp.tayssir-erp.dz `
@@ -85,12 +89,18 @@ echo $plain | npx tsx scripts/insert-live-data-source.ts `
 
 ```bash
 read -s -p "Password: " pw && echo
-echo "$pw" | npx tsx scripts/insert-live-data-source.ts \
+echo "$pw" | npm run live-data:insert -- \
   --tenant-slug wbp --type ODOO --name "WBP Production Odoo" \
   --url https://wbp.tayssir-erp.dz \
   --database wbp.tayssir-erp.dz \
   --username [user-email] \
   --password-from-stdin --brand-field marque_id
+```
+
+For help:
+
+```
+npm run live-data:insert -- --help
 ```
 
 The password reads from stdin; it never appears in shell history,
