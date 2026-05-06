@@ -35,6 +35,7 @@
     "probe:smart-import": "dotenv -e .env.local -- tsx --conditions=react-server scripts/probe-smart-import.ts",
     "brain:eval": "dotenv -e .env.local -- tsx --conditions=react-server scripts/brain-eval.ts",
     "live-data:insert": "dotenv -e .env.local -- tsx --conditions=react-server scripts/insert-live-data-source.ts",
+    "embeddings:backfill": "dotenv -e .env.local -- tsx --conditions=react-server scripts/backfill-embeddings.ts",
     "widget:dev": "npm --workspace @messaging-ai/widget run dev",
     "widget:build": "npm run widget:check-tokens && npm --workspace @messaging-ai/widget run build",
     "widget:tokens": "tsx scripts/generate-widget-tokens.ts",
