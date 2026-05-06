@@ -146,3 +146,16 @@ export async function requireTenantContext(
   }
   return ctx;
 }
+
+/**
+ * Convenience alias: `requireTenantContext(slug, { minRole: "OWNER" })`.
+ * Used by Server Actions that mutate billing-grade or
+ * credentials-bearing state (e.g. Live Data Source connect / edit /
+ * disconnect). Single chokepoint so the OWNER floor never drifts
+ * across actions.
+ */
+export async function requireOwnerContext(
+  slug: string,
+): Promise<TenantContext> {
+  return requireTenantContext(slug, { minRole: "OWNER" });
+}
