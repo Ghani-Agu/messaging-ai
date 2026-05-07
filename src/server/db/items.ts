@@ -184,6 +184,70 @@ export async function countItemsForTenant(tenantId: string): Promise<number> {
   return prisma.knowledgeItem.count({ where: { tenantId } });
 }
 
+/**
+ * Paginated list + total-count, both fetched in a single Prisma transaction.
+ *
+ * Used by the Products page so the operator can navigate the catalog with
+ * `?page=N` instead of getting a silently-truncated 50-row view. The
+ * embedding-presence enrichment runs as a separate raw query after the
+ * transaction completes, same as `listItemsForTenant`.
+ */
+export async function listAndCountItemsForTenant(args: {
+  tenantId: string;
+  category?: string;
+  search?: string;
+  skip: number;
+  take: number;
+}): Promise<{ items: ItemSummary[]; count: number }> {
+  const where: Prisma.KnowledgeItemWhereInput = { tenantId: args.tenantId };
+  if (args.category) where.category = args.category;
+  if (args.search?.trim()) {
+    const q = args.search.trim();
+    where.OR = [
+      { name: { contains: q, mode: "insensitive" } },
+      { sku: { contains: q, mode: "insensitive" } },
+      { brand: { contains: q, mode: "insensitive" } },
+    ];
+  }
+  const [rows, count] = await prisma.$transaction([
+    prisma.knowledgeItem.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: args.take,
+      skip: args.skip,
+      select: {
+        id: true,
+        name: true,
+        category: true,
+        brand: true,
+        sku: true,
+        currency: true,
+        priceCents: true,
+        availability: true,
+        lastVerifiedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+    prisma.knowledgeItem.count({ where }),
+  ]);
+  if (rows.length === 0) return { items: [], count };
+  const ids = rows.map((r) => r.id);
+  const embRows = await prisma.$queryRaw<Array<{ id: string; has: boolean }>>`
+    SELECT "id", ("embedding" IS NOT NULL) AS "has"
+      FROM "KnowledgeItem"
+     WHERE "id" IN (${Prisma.join(ids)})
+  `;
+  const embFlags = new Map(embRows.map((r) => [r.id, r.has]));
+  return {
+    items: rows.map((r) => ({
+      ...r,
+      hasEmbedding: embFlags.get(r.id) ?? false,
+    })),
+    count,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Embedding write path — pgvector via raw SQL.
 // (buildItemEmbedText lives in @/lib/items and is re-exported above so

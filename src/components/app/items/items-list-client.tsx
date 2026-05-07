@@ -21,12 +21,12 @@ import { Button } from "@/components/ui/button";
 import { PageShell } from "@/components/ui/page-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { Eyebrow } from "@/components/ui/eyebrow";
+import { Pagination } from "@/components/ui/pagination";
 import { cn } from "@/lib/utils";
 import {
   createItemAction,
   deleteItemAction,
   loadItem,
-  loadItems,
   markAllItemsVerifiedAction,
   markItemVerifiedAction,
   updateItemAction,
@@ -73,16 +73,26 @@ export function ItemsListClient({
   tenantSlug,
   initialItems,
   initialCount,
+  page,
+  pageSize,
+  totalPages,
   canEdit,
 }: {
   tenantSlug: string;
   initialItems: ItemSummary[];
   initialCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
   canEdit: boolean;
 }) {
   const router = useRouter();
-  const [items, setItems] = useState(initialItems);
-  const [count, setCount] = useState(initialCount);
+  // Items + count are server-driven by the `?page=` URL — props are the
+  // source of truth. After CRUD we just call router.refresh() and the
+  // server re-fetches the current page; no client-side cache to keep in
+  // sync.
+  const items = initialItems;
+  const count = initialCount;
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -120,10 +130,8 @@ export function ItemsListClient({
     }
   }
 
-  async function refresh() {
-    const r = await loadItems(tenantSlug);
-    setItems(r.items);
-    setCount(r.count);
+  function refresh() {
+    router.refresh();
   }
 
   function onMarkVerified(itemId: string) {
@@ -132,7 +140,7 @@ export function ItemsListClient({
     startTransition(async () => {
       try {
         await markItemVerifiedAction(tenantSlug, itemId);
-        await refresh();
+        refresh();
         flash({ kind: "ok", message: "Marked verified" });
       } catch (err) {
         flash({
@@ -150,7 +158,7 @@ export function ItemsListClient({
     startTransition(async () => {
       try {
         const r = await markAllItemsVerifiedAction(tenantSlug);
-        await refresh();
+        refresh();
         flash({ kind: "ok", message: `${r.count} items marked verified` });
       } catch (err) {
         flash({
@@ -168,7 +176,7 @@ export function ItemsListClient({
     startTransition(async () => {
       try {
         await deleteItemAction(tenantSlug, itemId);
-        await refresh();
+        refresh();
         flash({ kind: "ok", message: "Item deleted" });
       } catch (err) {
         flash({
@@ -194,7 +202,6 @@ export function ItemsListClient({
         await updateItemAction(tenantSlug, currentEdit.id, input);
       }
       setEditing(undefined);
-      await refresh();
       flash({
         kind: "ok",
         message: currentEdit === "new" ? "Item created" : "Item saved",
@@ -410,6 +417,19 @@ export function ItemsListClient({
           </table>
         </div>
       )}
+
+      {/* Pagination footer ─────────────────────────────────────── */}
+      {count > 0 ? (
+        <Pagination
+          currentPage={page}
+          totalPages={totalPages}
+          totalCount={count}
+          pageSize={pageSize}
+          itemLabel="product"
+          itemLabelPlural="products"
+          pageHref={(n) => `/${tenantSlug}/knowledge/items?page=${n}`}
+        />
+      ) : null}
 
       {/* Modal — create / edit ─────────────────────────────────── */}
       {editing !== undefined ? (

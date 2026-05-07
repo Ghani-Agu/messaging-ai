@@ -2,16 +2,13 @@
 
 import { requireTenantContext } from "@/server/tenancy/context";
 import {
-  countItemsForTenant,
   createItem,
   deleteItem,
   getItem,
   knowledgeItemInputSchema,
-  listItemsForTenant,
   markAllItemsVerifiedForTenant,
   markItemVerified,
   updateItem,
-  type ItemSummary,
   type KnowledgeItemInput,
 } from "@/server/db/items";
 import type { KnowledgeItem } from "@prisma/client";
@@ -32,22 +29,6 @@ import { importCsvForItems, type CsvImportResult } from "@/lib/csv-import";
  * semantic search until the worker catches up (typically a couple
  * seconds).
  */
-
-export async function loadItems(
-  slug: string,
-  filters?: { category?: string; search?: string },
-): Promise<{ items: ItemSummary[]; count: number }> {
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
-  const [items, count] = await Promise.all([
-    listItemsForTenant({
-      tenantId: ctx.tenant.id,
-      category: filters?.category,
-      search: filters?.search,
-    }),
-    countItemsForTenant(ctx.tenant.id),
-  ]);
-  return { items, count };
-}
 
 export async function loadItem(
   slug: string,
