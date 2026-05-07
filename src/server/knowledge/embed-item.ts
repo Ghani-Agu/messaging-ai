@@ -29,13 +29,7 @@ import { attachItemEmbedding, buildItemEmbedText } from "@/server/db/items";
  * item's failure aborts the run or just gets logged and skipped.
  */
 export async function embedKnowledgeItem(item: KnowledgeItem): Promise<void> {
-  const text = buildItemEmbedText({
-    name: item.name,
-    brand: item.brand,
-    sku: item.sku,
-    description: item.description,
-    specs: item.specs,
-  });
+  const text = buildItemEmbedText(item);
   if (!text || text.trim().length === 0) return;
 
   const result = await embed({

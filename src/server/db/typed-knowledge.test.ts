@@ -176,14 +176,58 @@ describe("updateQnaPair — dedupe on edit", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("buildItemEmbedText", () => {
-  it("concatenates name / brand / sku / description with em-dashes", () => {
+  it("composes name / labelled brand / labelled sku / description with em-dashes", () => {
     const text = buildItemEmbedText({
       name: "Macbook Pro M3",
       brand: "Apple",
       sku: "MBP-M3-14",
       description: "14-inch laptop with M3 chip.",
     });
-    expect(text).toBe("Macbook Pro M3 — Apple — MBP-M3-14 — 14-inch laptop with M3 chip.");
+    expect(text).toBe(
+      "Macbook Pro M3 — Marque: Apple — SKU: MBP-M3-14 — 14-inch laptop with M3 chip.",
+    );
+  });
+
+  it("inserts category between brand and sku with the Catégorie: label", () => {
+    const text = buildItemEmbedText({
+      name: "Détecteur de mouvement Pro",
+      brand: "AJAX",
+      category: "Sécurité / Détecteurs",
+      sku: "AJX-DM-PRO",
+      description: null,
+    });
+    expect(text).toBe(
+      "Détecteur de mouvement Pro — Marque: AJAX — Catégorie: Sécurité / Détecteurs — SKU: AJX-DM-PRO",
+    );
+  });
+
+  it("includes category alone when brand is null (synced-item path)", () => {
+    const text = buildItemEmbedText({
+      name: "AJAX Détecteur DoorProtect",
+      brand: null,
+      category: "Sécurité",
+      sku: null,
+      description: null,
+    });
+    expect(text).toBe(
+      "AJAX Détecteur DoorProtect — Catégorie: Sécurité",
+    );
+    expect(text).not.toContain("Marque:");
+  });
+
+  it("falls back to name+description+specs when brand and category are both null", () => {
+    const text = buildItemEmbedText({
+      name: "Solo Item",
+      brand: null,
+      category: null,
+      sku: null,
+      description: "A standalone product.",
+      specs: { color: "red" },
+    });
+    expect(text).toBe("Solo Item — A standalone product. — color: red");
+    expect(text).not.toContain("Marque:");
+    expect(text).not.toContain("Catégorie:");
+    expect(text).not.toContain("SKU:");
   });
 
   it("flattens spec key:value pairs and skips reserved keys (_template_id)", () => {

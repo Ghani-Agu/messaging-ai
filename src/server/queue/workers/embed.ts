@@ -177,20 +177,14 @@ async function handleEmbedItemsBatch(
 
   const unembeddedIds = present.map((r) => r.id);
   // Re-load each item's text fields fresh (they may have changed since
-  // enqueue). buildItemEmbedText concatenates name / brand / sku /
-  // description + spec key:value pairs (excluding reserved _-prefix keys)
-  // — same shape the lexical tsvector uses minus reserved keys.
+  // enqueue). buildItemEmbedText composes name + labelled brand / category
+  // / SKU + description + spec key:value pairs (excluding reserved _-prefix
+  // keys) — same fields the lexical tsvector uses minus reserved keys.
   const rows = await Promise.all(
     unembeddedIds.map(async (id) => {
       const item = await getItemUnscoped(id);
       if (!item) return null;
-      const text = buildItemEmbedText({
-        name: item.name,
-        brand: item.brand,
-        sku: item.sku,
-        description: item.description,
-        specs: item.specs,
-      });
+      const text = buildItemEmbedText(item);
       if (!text || text.trim().length === 0) return null;
       return { id: item.id, text };
     }),

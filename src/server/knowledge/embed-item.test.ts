@@ -104,6 +104,7 @@ describe("embedKnowledgeItem", () => {
     await embedKnowledgeItem(
       buildItem({
         brand: null,
+        category: null,
         sku: null,
         description: null,
         specs: {},
@@ -137,6 +138,7 @@ describe("embedKnowledgeItem", () => {
       buildItem({
         name: "   ",
         brand: null,
+        category: null,
         sku: null,
         description: null,
         specs: {},

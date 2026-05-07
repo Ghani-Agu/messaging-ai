@@ -11,7 +11,7 @@
  */
 
 import { z } from "zod";
-import type { ItemAvailability } from "@prisma/client";
+import type { ItemAvailability, KnowledgeItem } from "@prisma/client";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Specs (free-form bag with reserved keys)
@@ -72,25 +72,56 @@ export type KnowledgeItemInput = z.infer<typeof knowledgeItemInputSchema>;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Build the embed input for an item. Concatenates name / brand / sku /
- * description plus key:value pairs from specs (excluding reserved keys).
- *
- * Pure function — exposed for the embed worker (queue/workers/embed.ts)
- * and for unit tests.
+ * Subset of KnowledgeItem fields needed to compose the embed text. Optional
+ * fields are typed `?: T | null` so a full KnowledgeItem (where these are
+ * `T | null`) satisfies the shape structurally, AND tests can pass partial
+ * fixtures without filling every nullable column. Both the embed worker and
+ * the inline `embedKnowledgeItem` helper just pass `item`.
  */
-export function buildItemEmbedText(args: {
-  name: string;
-  brand?: string | null;
-  sku?: string | null;
-  description?: string | null;
+export type ItemEmbedSource = {
+  name: KnowledgeItem["name"];
+  brand?: KnowledgeItem["brand"];
+  category?: KnowledgeItem["category"];
+  sku?: KnowledgeItem["sku"];
+  description?: KnowledgeItem["description"];
   specs?: unknown;
-}): string {
-  const parts: string[] = [args.name.trim()];
-  if (args.brand) parts.push(args.brand.trim());
-  if (args.sku) parts.push(args.sku.trim());
-  if (args.description) parts.push(args.description.trim());
-  if (args.specs && typeof args.specs === "object" && !Array.isArray(args.specs)) {
-    for (const [k, v] of Object.entries(args.specs as Record<string, unknown>)) {
+};
+
+/**
+ * Build the embed input for an item. Composes name + labelled brand /
+ * category / SKU + description + free-form spec key:value pairs.
+ *
+ * Order matters for retrieval quality: embedding models tend to weight
+ * earlier tokens slightly more, so the discriminative fields (brand,
+ * category) sit near the front.
+ *
+ *   name → "Marque: <brand>" → "Catégorie: <category>" → "SKU: <sku>"
+ *        → description → "<specKey>: <value>" pairs (excluding reserved
+ *        underscore-prefixed keys)
+ *
+ * Why labelled in French ("Marque", "Catégorie") and not English: customer
+ * queries on this platform are predominantly FR / Darija / mixed, so the
+ * label tokens themselves can co-occur with customer phrasing during
+ * retrieval. Specs intentionally use bare `key: value` because keys are
+ * heterogeneous and any fixed prefix would mislabel half the time.
+ *
+ * Brand inference (from name's first token, etc.) was considered and
+ * dropped for v1 — too many false positives on patterns like "XVR Dahua…"
+ * (XVR is a product line, Dahua is the brand). Synced items with brand=null
+ * still get the category boost, and the embedding model already learns the
+ * brand from the start of `name` for most synced products.
+ *
+ * Pure function — exposed for the embed worker (queue/workers/embed.ts),
+ * the inline embed helper (server/knowledge/embed-item.ts), and unit tests.
+ */
+export function buildItemEmbedText(item: ItemEmbedSource): string {
+  const parts: string[] = [item.name.trim()];
+  if (item.brand) parts.push(`Marque: ${item.brand.trim()}`);
+  if (item.category) parts.push(`Catégorie: ${item.category.trim()}`);
+  if (item.sku) parts.push(`SKU: ${item.sku.trim()}`);
+  if (item.description) parts.push(item.description.trim());
+  if (item.specs && typeof item.specs === "object" && !Array.isArray(item.specs)) {
+    for (const [k, v] of Object.entries(item.specs as Record<string, unknown>)) {
       if (k.startsWith("_")) continue; // reserved keys (e.g. _template_id)
       if (v == null) continue;
       const s = typeof v === "string" ? v : String(v);
