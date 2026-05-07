@@ -185,6 +185,24 @@ export async function countItemsForTenant(tenantId: string): Promise<number> {
 }
 
 /**
+ * Distinct, non-null categories present in the tenant's catalog. Used by
+ * the Products page to populate the category-filter dropdown so options
+ * reflect the entire catalog (not just the current paginated/filtered
+ * page's items).
+ */
+export async function listDistinctCategoriesForTenant(
+  tenantId: string,
+): Promise<string[]> {
+  const rows = await prisma.knowledgeItem.findMany({
+    where: { tenantId, category: { not: null } },
+    distinct: ["category"],
+    select: { category: true },
+    orderBy: { category: "asc" },
+  });
+  return rows.map((r) => r.category).filter((c): c is string => c !== null);
+}
+
+/**
  * Paginated list + total-count, both fetched in a single Prisma transaction.
  *
  * Used by the Products page so the operator can navigate the catalog with

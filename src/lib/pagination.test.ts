@@ -145,3 +145,50 @@ describe("pagination math — full integration scenario", () => {
     expect(total - (lastPage - 1) * pageSize).toBe(46);
   });
 });
+
+describe("pagination math — filtered counts", () => {
+  it("totalCount=20 with pageSize=50 → 1 page, single-entry window", () => {
+    const total = 20;
+    const pageSize = 50;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    expect(totalPages).toBe(1);
+    expect(getPageWindow(1, totalPages)).toEqual([1]);
+  });
+
+  it("totalCount=0 (no matches) → empty window, page still clamps to 1", () => {
+    const total = 0;
+    const pageSize = 50;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    expect(totalPages).toBe(1);
+    // Component renders no Pagination footer when count===0; the helper's
+    // own guard returns an empty window for total<=0.
+    expect(getPageWindow(1, 0)).toEqual([]);
+    // Clamp returns a valid page so the URL builder doesn't blow up.
+    expect(clampPage(5, totalPages)).toBe(1);
+  });
+
+  it("page=5 with filtered totalCount=20 clamps back to last filtered page", () => {
+    // Operator was on page 5 of a 1996-item view, then narrowed search to
+    // 20 matches. The page param in the URL is now stale — clampPage
+    // drives the server-side reslice onto the last valid page (page 1).
+    const total = 20;
+    const pageSize = 50;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    expect(clampPage(5, totalPages)).toBe(1);
+  });
+
+  it("filtered totalCount=120 → 3 pages, each page yields the right slice", () => {
+    const total = 120;
+    const pageSize = 50;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    expect(totalPages).toBe(3);
+    // Page 1: rows 1–50.
+    expect((1 - 1) * pageSize + 1).toBe(1);
+    expect(Math.min(1 * pageSize, total)).toBe(50);
+    // Page 3: rows 101–120.
+    expect((3 - 1) * pageSize + 1).toBe(101);
+    expect(Math.min(3 * pageSize, total)).toBe(120);
+    // No ellipsis when the window fits in <=7 entries.
+    expect(getPageWindow(2, totalPages)).toEqual([1, 2, 3]);
+  });
+});

@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { getTenantContext } from "@/server/tenancy/context";
-import { listAndCountItemsForTenant } from "@/server/db/items";
+import {
+  listAndCountItemsForTenant,
+  listDistinctCategoriesForTenant,
+} from "@/server/db/items";
 import { ItemsListClient } from "@/components/app/items/items-list-client";
 import { clampPage, parsePageParam } from "@/lib/pagination";
 
@@ -15,26 +18,41 @@ export default async function ItemsPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string }>;
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ page?: string; q?: string; category?: string }>;
 }) {
   const { tenantSlug } = await params;
-  const { page: rawPage } = await searchParams;
+  const { page: rawPage, q: rawQ, category: rawCategory } = await searchParams;
   const ctx = await getTenantContext(tenantSlug);
 
-  // First fetch with skip=0 to learn the total, then re-fetch the right page
-  // if the URL pointed past the end. The two-fetch path only triggers when
-  // the operator typed an out-of-range page; the common case is one fetch.
+  // Normalise filters: trim, then drop empty so downstream `if (search)` /
+  // `if (category)` checks work uniformly.
+  const search = rawQ?.trim() ? rawQ.trim() : undefined;
+  const category = rawCategory?.trim() ? rawCategory.trim() : undefined;
+
+  // First fetch with skip = (requested-1) * PAGE_SIZE. If the URL points
+  // past the filtered total (e.g. operator was on page 5, then narrowed
+  // the search to 12 results), clamp + re-fetch the right page. The
+  // re-fetch path only triggers on out-of-range URLs; the common case is
+  // one fetch.
   const requested = parsePageParam(rawPage);
-  let { items, count } = await listAndCountItemsForTenant({
-    tenantId: ctx.tenant.id,
-    skip: (requested - 1) * PAGE_SIZE,
-    take: PAGE_SIZE,
-  });
+  const [allCategories, firstPage] = await Promise.all([
+    listDistinctCategoriesForTenant(ctx.tenant.id),
+    listAndCountItemsForTenant({
+      tenantId: ctx.tenant.id,
+      search,
+      category,
+      skip: (requested - 1) * PAGE_SIZE,
+      take: PAGE_SIZE,
+    }),
+  ]);
+  let { items, count } = firstPage;
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   const page = clampPage(requested, totalPages);
   if (page !== requested && count > 0) {
     const reslice = await listAndCountItemsForTenant({
       tenantId: ctx.tenant.id,
+      search,
+      category,
       skip: (page - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
     });
@@ -53,6 +71,9 @@ export default async function ItemsPage({
       page={page}
       pageSize={PAGE_SIZE}
       totalPages={totalPages}
+      search={search ?? ""}
+      category={category ?? ""}
+      allCategories={allCategories}
       canEdit={canEdit}
     />
   );

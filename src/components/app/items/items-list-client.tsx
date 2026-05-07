@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -76,6 +76,9 @@ export function ItemsListClient({
   page,
   pageSize,
   totalPages,
+  search,
+  category,
+  allCategories,
   canEdit,
 }: {
   tenantSlug: string;
@@ -84,42 +87,74 @@ export function ItemsListClient({
   page: number;
   pageSize: number;
   totalPages: number;
+  search: string;
+  category: string;
+  allCategories: string[];
   canEdit: boolean;
 }) {
   const router = useRouter();
-  // Items + count are server-driven by the `?page=` URL — props are the
-  // source of truth. After CRUD we just call router.refresh() and the
-  // server re-fetches the current page; no client-side cache to keep in
-  // sync.
+  // Items + count are server-driven by the URL — props are the source of
+  // truth. Filter / search / pagination all live in the query string; the
+  // server re-fetches on every change. After CRUD we call router.refresh()
+  // to reload the current view.
   const items = initialItems;
   const count = initialCount;
-  const [search, setSearch] = useState("");
-  const [category, setCategory] = useState<string>("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [, startTransition] = useTransition();
+
+  // Local input state for the search box. Initialised from the URL-driven
+  // `search` prop on mount, then re-synced when the URL changes (browser
+  // back/forward, direct paste, programmatic clear). Decoupled from the
+  // URL so typing doesn't await a roundtrip per keystroke.
+  const [searchInput, setSearchInput] = useState(search);
+  useEffect(() => {
+    setSearchInput(search);
+  }, [search]);
 
   // Modal state — open with `null` for create, with the item for edit.
   const [editing, setEditing] = useState<KnowledgeItem | null | "new" | undefined>(
     undefined,
   );
 
-  const categories = useMemo(() => {
-    const set = new Set<string>();
-    for (const it of items) if (it.category) set.add(it.category);
-    return Array.from(set).sort();
-  }, [items]);
+  const buildItemsHref = useCallback(
+    (next: { q?: string; category?: string; page?: number }) => {
+      const params = new URLSearchParams();
+      if (next.q && next.q.trim()) params.set("q", next.q.trim());
+      if (next.category && next.category.trim())
+        params.set("category", next.category.trim());
+      if (next.page && next.page > 1) params.set("page", String(next.page));
+      const qs = params.toString();
+      return `/${tenantSlug}/knowledge/items${qs ? `?${qs}` : ""}`;
+    },
+    [tenantSlug],
+  );
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return items.filter((it) => {
-      if (category && it.category !== category) return false;
-      if (q) {
-        const hay = [it.name, it.brand, it.sku].filter(Boolean).join(" ").toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [items, search, category]);
+  // Debounced URL push when the search input changes. 300 ms keeps the
+  // URL history clean (one entry per intent, not per keystroke) and gives
+  // the server time to respond between presses on a slow connection.
+  // Filter changes always reset page to 1 — paginating into "page 5 of
+  // results-for-foo" then narrowing to "results-for-fooo" rarely matches
+  // user intent.
+  useEffect(() => {
+    if (searchInput === search) return;
+    const timer = setTimeout(() => {
+      router.push(buildItemsHref({ q: searchInput, category, page: 1 }));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput, search, category, router, buildItemsHref]);
+
+  function onCategoryChange(next: string) {
+    // No debounce for the dropdown — selection is a single deliberate
+    // action, not a keystroke stream.
+    router.push(buildItemsHref({ q: searchInput, category: next, page: 1 }));
+  }
+
+  function onClearSearch() {
+    setSearchInput("");
+    router.push(buildItemsHref({ q: "", category, page: 1 }));
+  }
+
+  const filtersActive = search.length > 0 || category.length > 0;
 
   function flash(s: Status, durationMs = 2200) {
     setStatus(s);
@@ -282,28 +317,39 @@ export function ItemsListClient({
           />
           <input
             type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search by name, brand, SKU…"
             className={cn(
-              "block h-10 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] pl-9 pr-3 text-body text-[var(--text-primary)]",
-              "transition-colors duration-150 ease-out",
+              "block h-10 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] pl-9 text-body text-[var(--text-primary)]",
+              searchInput ? "pr-9" : "pr-3",
+              "transition-colors duration-150 ease-out motion-reduce:transition-none",
               "hover:border-[var(--border-strong)] focus:border-[var(--accent-base)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-base)]/30",
             )}
           />
+          {searchInput ? (
+            <button
+              type="button"
+              onClick={onClearSearch}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-surface-elevated)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)]"
+            >
+              <X className="size-3.5" aria-hidden />
+            </button>
+          ) : null}
         </div>
-        {categories.length > 0 ? (
+        {allCategories.length > 0 ? (
           <select
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
+            onChange={(e) => onCategoryChange(e.target.value)}
             className={cn(
               "h-10 rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3 text-body text-[var(--text-primary)]",
-              "transition-colors duration-150 ease-out",
+              "transition-colors duration-150 ease-out motion-reduce:transition-none",
               "hover:border-[var(--border-strong)] focus:border-[var(--accent-base)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-base)]/30",
             )}
           >
             <option value="">All categories</option>
-            {categories.map((c) => (
+            {allCategories.map((c) => (
               <option key={c} value={c}>
                 {c}
               </option>
@@ -312,10 +358,27 @@ export function ItemsListClient({
         ) : null}
       </div>
 
+      {/* Filter summary ───────────────────────────────────────────── */}
+      {filtersActive ? (
+        <div className="flex flex-wrap items-center gap-2 text-caption text-[var(--text-tertiary)]">
+          <span>
+            {count} {count === 1 ? "match" : "matches"}
+            {search ? ` for “${search}”` : ""}
+            {category ? ` in “${category}”` : ""}
+          </span>
+          <Link
+            href={buildItemsHref({ page: 1 })}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-0.5 text-caption text-[var(--text-secondary)] transition-colors duration-150 ease-out motion-reduce:transition-none hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)]"
+          >
+            Clear filters
+          </Link>
+        </div>
+      ) : null}
+
       {/* Table ──────────────────────────────────────────────────── */}
-      {filtered.length === 0 ? (
+      {items.length === 0 ? (
         <EmptyState
-          hasItems={items.length > 0}
+          hasItems={filtersActive}
           onAdd={() => canEdit && setEditing("new")}
           canEdit={canEdit}
         />
@@ -334,7 +397,7 @@ export function ItemsListClient({
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border-subtle)]">
-              {filtered.map((it) => (
+              {items.map((it) => (
                 <tr key={it.id} className="hover:bg-[var(--bg-surface-elevated)]/50">
                   <td className="px-3 py-2 text-[var(--text-primary)]">
                     <div className="font-medium">{it.name}</div>
@@ -427,7 +490,7 @@ export function ItemsListClient({
           pageSize={pageSize}
           itemLabel="product"
           itemLabelPlural="products"
-          pageHref={(n) => `/${tenantSlug}/knowledge/items?page=${n}`}
+          pageHref={(n) => buildItemsHref({ q: search, category, page: n })}
         />
       ) : null}
 
