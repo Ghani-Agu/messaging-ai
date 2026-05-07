@@ -1,7 +1,7 @@
 /**
  * One-shot backfill: embed every KnowledgeItem whose `embedding` column
  * is NULL. Used to rescue items that landed before embed-on-sync wiring
- * existed (the 1.7K WBP products synced from Odoo prior to this PR), and
+ * existed (the 1.7K WBP products synced from Odoo prior to that PR), and
  * for routine recovery from partial embedding failures during sync.
  *
  * Idempotent: the WHERE clause already filters out embedded rows, so a
@@ -11,6 +11,8 @@
  *
  * Usage:
  *   npm run embeddings:backfill
+ *   npm run embeddings:backfill -- --force
+ *   npm run embeddings:backfill -- --help
  *
  * Performance: progress is reported every 50 items with elapsed seconds.
  *
@@ -19,28 +21,133 @@
  * manual imports; this script is the operator-driven recovery channel.
  */
 
+import { parseArgs } from "node:util";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db/client";
 import { embedKnowledgeItem } from "@/server/knowledge/embed-item";
 
 const PROGRESS_INTERVAL = 50;
+// Empirical per-item cost (sequential): one embedding API call (~400–500 ms
+// p50, ~600 ms tail) plus a single-row UPDATE (~50 ms). Used only to size
+// the --force confirmation prompt's runtime estimate.
+const ESTIMATED_MS_PER_ITEM = 600;
+
+function printHelp(): void {
+  console.log(`
+Backfill KnowledgeItem embeddings.
+
+Usage:
+  npm run embeddings:backfill                Embed only items missing an embedding.
+  npm run embeddings:backfill -- --force     Regenerate ALL items (prompts for confirmation).
+  npm run embeddings:backfill -- --help      Show this message.
+
+Options:
+  --force                Regenerate ALL items even if already embedded.
+                         Required after embed-text composition changes.
+                         Prompts for confirmation before running.
+  --help                 Show this message and exit.
+`);
+}
+
+/**
+ * Read a single line from stdin (terminated by \\n or EOF). Used to gate
+ * --force on an explicit "YES" so a fat-fingered run can't blow through
+ * the embedding budget. Returns the trimmed line.
+ */
+async function readStdinLine(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    const onData = (chunk: Buffer): void => {
+      buf += chunk.toString("utf8");
+      const nl = buf.indexOf("\n");
+      if (nl !== -1) {
+        process.stdin.removeListener("data", onData);
+        process.stdin.removeListener("end", onEnd);
+        process.stdin.removeListener("error", onError);
+        resolve(buf.slice(0, nl).trim());
+      }
+    };
+    const onEnd = (): void => {
+      process.stdin.removeListener("data", onData);
+      process.stdin.removeListener("error", onError);
+      resolve(buf.trim());
+    };
+    const onError = (err: Error): void => {
+      process.stdin.removeListener("data", onData);
+      process.stdin.removeListener("end", onEnd);
+      reject(err);
+    };
+    process.stdin.on("data", onData);
+    process.stdin.on("end", onEnd);
+    process.stdin.on("error", onError);
+  });
+}
 
 async function main(): Promise<void> {
-  // Items with no embedding yet, oldest first. Raw query because
-  // KnowledgeItem.embedding is `Unsupported("vector(1024)")` — Prisma
-  // can't bind it (same reason listUnembeddedItemIds in db/items.ts uses
-  // raw SQL). Cross-tenant by design: an operator running backfill wants
-  // every orphaned row, regardless of which tenant they belong to.
-  const rows = await prisma.$queryRaw<
-    Array<{ id: string; tenantId: string; name: string }>
-  >(Prisma.sql`
-    SELECT "id", "tenantId", "name"
-      FROM "KnowledgeItem"
-     WHERE "embedding" IS NULL
-     ORDER BY "createdAt" ASC
-  `);
+  const { values } = parseArgs({
+    options: {
+      force: { type: "boolean", default: false },
+      help: { type: "boolean", default: false },
+    },
+  });
 
-  console.log(`Found ${rows.length} items needing embeddings.`);
+  if (values.help) {
+    printHelp();
+    return;
+  }
+
+  const force = values.force === true;
+
+  // Items to embed. Default mode filters by `embedding IS NULL` (the
+  // idempotent recovery path); --force returns every row across every
+  // tenant. Raw query because KnowledgeItem.embedding is
+  // `Unsupported("vector(1024)")` — Prisma can't bind it (same reason
+  // listUnembeddedItemIds in db/items.ts uses raw SQL).
+  const rows = force
+    ? await prisma.$queryRaw<
+        Array<{ id: string; tenantId: string; name: string }>
+      >(Prisma.sql`
+        SELECT "id", "tenantId", "name"
+          FROM "KnowledgeItem"
+         ORDER BY "createdAt" ASC
+      `)
+    : await prisma.$queryRaw<
+        Array<{ id: string; tenantId: string; name: string }>
+      >(Prisma.sql`
+        SELECT "id", "tenantId", "name"
+          FROM "KnowledgeItem"
+         WHERE "embedding" IS NULL
+         ORDER BY "createdAt" ASC
+      `);
+
+  if (force) {
+    const minutesEstimate = Math.max(
+      1,
+      Math.ceil((rows.length * ESTIMATED_MS_PER_ITEM) / 60_000),
+    );
+    console.log("");
+    console.log(
+      `WARNING: --force will regenerate ALL ${rows.length} items including those`,
+    );
+    console.log(
+      `already embedded. This will consume embedding API quota proportional`,
+    );
+    console.log(
+      `to your catalog size and take ~${minutesEstimate} minutes.`,
+    );
+    console.log("");
+    process.stdout.write("Continue? Type YES to proceed: ");
+    const reply = await readStdinLine();
+    if (reply !== "YES") {
+      console.log("Aborted.");
+      await prisma.$disconnect();
+      return;
+    }
+    console.log("");
+  } else {
+    console.log(`Found ${rows.length} items needing embeddings.`);
+  }
+
   if (rows.length === 0) {
     await prisma.$disconnect();
     return;
@@ -54,8 +161,8 @@ async function main(): Promise<void> {
     const row = rows[i];
     if (!row) continue;
     try {
-      // Re-load the full row — embedKnowledgeItem reads brand / sku /
-      // description / specs to compose the embed text. The list-query
+      // Re-load the full row — embedKnowledgeItem reads brand / category /
+      // sku / description / specs to compose the embed text. The list-query
       // above only pulls id/tenantId/name to keep memory bounded for
       // large backfills.
       const item = await prisma.knowledgeItem.findUnique({
