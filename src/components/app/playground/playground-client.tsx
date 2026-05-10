@@ -21,6 +21,7 @@ import {
   type PlaygroundThreadMessage,
 } from "./playground-message";
 import type { PlaygroundCitation } from "./playground-citations";
+import { EXAMPLE_PROMPTS } from "./playground-example-prompts";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
@@ -35,35 +36,6 @@ const LANGUAGE_BUTTONS: Array<{ value: SupportedLanguage; label: string }> = [
   { value: "en", label: "EN" },
   { value: "darija", label: "Darija" },
 ];
-
-/**
- * Per-language example prompts shown in the empty state. These seed the
- * input on click. Wording chosen to exercise different brain paths:
- * a product-catalog query, an operational-fact (hours), and a delivery
- * intent — all of which should ground in real knowledge if any exists.
- */
-const EXAMPLE_PROMPTS: Record<SupportedLanguage, string[]> = {
-  en: [
-    "What products do you sell?",
-    "Are you open today?",
-    "Do you ship to Oran?",
-  ],
-  fr: [
-    "Quels produits vendez-vous ?",
-    "Êtes-vous ouverts aujourd'hui ?",
-    "Livrez-vous à Oran ?",
-  ],
-  ar: [
-    "ما المنتجات التي تبيعونها؟",
-    "هل أنتم مفتوحون اليوم؟",
-    "هل توصلون إلى وهران؟",
-  ],
-  darija: [
-    "wach 3andkom des produits jdad?",
-    "rakum 7allin daba?",
-    "katwasslo l Oran?",
-  ],
-};
 
 type PlaygroundClientProps = {
   tenantSlug: string;
