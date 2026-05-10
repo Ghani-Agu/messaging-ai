@@ -1,7 +1,7 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db/client";
-import { getVoiceProfile } from "@/lib/validators";
+import { getAiBehaviorForTenant, getVoiceProfile } from "@/lib/validators";
 import {
   retrieveChunks,
   retrieveItems,
@@ -152,6 +152,15 @@ export function __resetConversationRetryBudgetForTests(): void {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // [brain-cache] cache-invalidation logging (P4r-3 Gate-1 B)
+//
+// `block-a sha` logs the SHA of the STATIC portion of Block A (the platform
+// rules text). Per-tenant variation introduced by the AI BEHAVIOR RULES
+// section is not captured here — it rides the per-tenant Block-B cache
+// envelope at the Anthropic-API level, but our diagnostic log keeps Block A
+// as a single deploy-time platform-rules sentinel. The tradeoff was a
+// deliberate choice: per-tenant Block-A drift logs would fire on every
+// toggle flip, which is operator-driven config, not a deploy-time signal
+// worth alerting on.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BLOCK_A_SHA = sha12(BLOCK_A_TEXT);
@@ -404,6 +413,7 @@ async function prepareCallContext(input: BrainInput): Promise<CallContext> {
   ]);
   if (!tenant) throw new Error(`tenant not found: ${tenantId}`);
   const voice = getVoiceProfile(tenant.settings as Prisma.JsonValue);
+  const aiBehavior = getAiBehaviorForTenant(tenant.settings as Prisma.JsonValue);
   const operationalFactsTier1 = pickTier1(factsData);
 
   // Embed the query ONCE and share the vector across all three retrieval
@@ -569,6 +579,7 @@ async function prepareCallContext(input: BrainInput): Promise<CallContext> {
     history,
     message: trimmedMessage,
     brandSummaries,
+    aiBehavior,
   });
 
   // Token-budget guard with the actual cl100k tokenizer.

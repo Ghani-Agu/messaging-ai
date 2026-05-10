@@ -2,7 +2,7 @@ import "server-only";
 import type { ItemAvailability, Prisma } from "@prisma/client";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100kBase from "js-tiktoken/ranks/cl100k_base";
-import type { VoiceProfile } from "@/lib/validators";
+import { AI_BEHAVIOR_DEFAULTS, type AiBehavior, type VoiceProfile } from "@/lib/validators";
 import type {
   OperationalFactsHours,
   OperationalFactsLocation,
@@ -17,7 +17,8 @@ import type {
  * every tenant, Block B is identical within a tenant. Block C (the
  * per-request runtime block) lives on the user turn, not here.
  *
- * Block A target: ≤ 1700 input tokens (asserted by the unit test).
+ * Block A target: ≤ 1950 input tokens at platform defaults (asserted by
+ * the unit test).
  * Block A measured: 594 tokens (Phase 4 initial); briefly 794 during
  * the P4r-3 schema-split attempt; 738 after revert; ~1119 after the
  * P4r-7 Algerian-Darija coaching; ~1377 after the forbidden-Moroccan
@@ -25,10 +26,13 @@ import type {
  * ~1601 after the BRAND SUMMARY bullet (catalog-frequency answers for
  * "3andkom Ajax?"-style questions); ~1640 after the BRAND SUMMARY
  * bullet was rewritten for category-aware menu replies (Dahua across
- * cameras IP / NVR / switches — ask the customer to narrow down). Each
- * addition is load-bearing for a customer-facing failure mode the prior
- * eval hit. Never broaden the LANGUAGE HANDLING section to "Maghrebi
- * Darija" — the platform serves Algerian businesses specifically.
+ * cameras IP / NVR / switches — ask the customer to narrow down);
+ * ~1880 once Block A became tenant-aware via the AI BEHAVIOR RULES
+ * section (Settings page toggles: show prices / show stock counts /
+ * require human for orders). Each addition is load-bearing for a
+ * customer-facing failure mode the prior eval hit. Never broaden the
+ * LANGUAGE HANDLING section to "Maghrebi Darija" — the platform serves
+ * Algerian businesses specifically.
  *
  * Pure functions — no I/O, no globals, easy to unit-test.
  */
@@ -46,15 +50,24 @@ export type SystemBlock = {
 };
 
 /**
- * Block A — platform rules. Static across every tenant. The single
- * authoritative copy of: grounding rules, language rules (incl. Darija
- * Arabizi vs Arabic-script mirroring), tone, escalation enum, output
- * contract.
+ * Block A — platform rules. The "base" portion is static across every
+ * tenant (grounding rules, language rules, Algerian Darija coaching,
+ * tone, escalation enum, output contract). The trailing AI BEHAVIOR
+ * RULES section is rendered per tenant from `Tenant.settings.aiBehavior`
+ * — it tells the model what to share with the customer (prices, stock
+ * counts, order confirmations). Both portions are concatenated by
+ * `buildBlockA` into the actual SystemBlock text shipped to Claude.
  *
- * Do not edit this string casually — `__pinned-block-a-tokens` enforces
- * the budget.
+ * Cache implication: making Block A tenant-aware doesn't lose any
+ * cache hits we already had — the `cache_control: ephemeral` marker
+ * sits on Block B (per-tenant), so the cached prefix was always
+ * per-tenant. Toggle flips invalidate the same per-tenant prefix the
+ * voice-profile editor would.
+ *
+ * Do not edit BLOCK_A_BASE_TEXT casually — `__pinned-block-a-tokens`
+ * enforces the budget on the full rendered Block A.
  */
-export const BLOCK_A_TEXT = `You are an AI customer-service assistant for a multi-tenant SaaS. Your job: answer the end-customer's message on behalf of a specific business, in their language, grounded ONLY in that business's knowledge base.
+export const BLOCK_A_BASE_TEXT = `You are an AI customer-service assistant for a multi-tenant SaaS. Your job: answer the end-customer's message on behalf of a specific business, in their language, grounded ONLY in that business's knowledge base.
 
 GROUNDING (highest priority)
 - Use ONLY the CITATIONS below. No outside knowledge for facts about products, prices, policies, hours, locations, or anything specific to the business.
@@ -127,7 +140,53 @@ The orchestrator may override post-hoc with LOW_CONFIDENCE based on a determinis
 OUTPUT
 - You MUST respond by calling the send_reply tool. No free text.`;
 
-export function buildBlockA(): SystemBlock {
+/**
+ * Backwards-compatible alias used by callers / tests that import the
+ * static portion of Block A as `BLOCK_A_TEXT`. New code should reach
+ * for `BLOCK_A_BASE_TEXT` or call `buildBlockA(...)` directly.
+ */
+export const BLOCK_A_TEXT = BLOCK_A_BASE_TEXT;
+
+/**
+ * Render the per-tenant AI BEHAVIOR RULES section. Driven entirely by the
+ * three booleans on `aiBehavior`. Each toggle has a permissive and a
+ * restrictive copy chosen so the model can act without re-reading the
+ * grounding rules — e.g. when prices are off the rule includes the
+ * exact fallback phrasing the customer should hear.
+ */
+export function renderAiBehaviorRules(aiBehavior: AiBehavior): string {
+  const pricing = aiBehavior.showPrices
+    ? "Show product prices when they appear in your citations. Format: '13 000 DZD' or whatever currency is shown."
+    : "NEVER mention prices, even if they appear in your citations. Say 'disponible' (available) or 'non disponible' (not available) instead. If the customer asks about price, reply: 'Pour les prix exacts, contactez notre équipe commerciale — ils vous donneront un devis adapté.' Then provide contact info from your CONTACT INFO citations.";
+  const stock = aiBehavior.showStockCounts
+    ? "Show stock counts when relevant (e.g. '6 en stock, 5 en rupture')."
+    : "NEVER mention exact stock counts. Say 'disponible' or 'non disponible' only. The brand summary categories show counts for YOUR awareness — do not echo them to the customer.";
+  const orders = aiBehavior.requireHumanForOrders
+    ? "If the customer wants to BUY, PLACE AN ORDER, or RESERVE a product, do NOT confirm the order yourself. Escalate to the commercial team using your CONTACT INFO citations. Example: 'Bach tcommander, contacte l\\'équipe commerciale, hadu rahom ya3jbouk les détails ta3 la commande w yfwtouhalek.'"
+    : "You may confirm product interest and capture basic order details (product name, quantity, customer phone). Always escalate final payment confirmation to a human.";
+
+  return [
+    "",
+    "═══ AI BEHAVIOR RULES ═══",
+    "These rules control what you share with customers. Follow them strictly:",
+    "",
+    `PRICING: ${pricing}`,
+    `STOCK COUNTS: ${stock}`,
+    `ORDERS: ${orders}`,
+    "",
+    "═══ END AI BEHAVIOR RULES ═══",
+  ].join("\n");
+}
+
+/**
+ * Assemble Block A. `aiBehavior` is optional — when omitted the AI BEHAVIOR
+ * RULES section renders against AI_BEHAVIOR_DEFAULTS so the brain always
+ * has a fully-shaped policy block, even for legacy tenants whose settings
+ * predate the toggles.
+ */
+export function buildBlockA(
+  args: { aiBehavior?: AiBehavior } = {},
+): SystemBlock {
   // P4r-5 cache adjustment: removed the standalone Block-A cache_control
   // marker. The cache-effectiveness probe (`npm run probe:cache`) found
   // that splitting the prefix across three breakpoints (tools[], Block A,
@@ -136,7 +195,9 @@ export function buildBlockA(): SystemBlock {
   // only the Block-B marker means the full prefix (tools + Block A +
   // Block B) is one cumulative cached segment — comfortably above the
   // 1024-token Sonnet minimum.
-  return { type: "text", text: BLOCK_A_TEXT };
+  const aiBehavior = args.aiBehavior ?? AI_BEHAVIOR_DEFAULTS;
+  const text = `${BLOCK_A_BASE_TEXT}\n${renderAiBehaviorRules(aiBehavior)}`;
+  return { type: "text", text };
 }
 
 /**
@@ -325,11 +386,23 @@ const ITEM_SPEC_FIELDS_RENDER_LIMIT = 2;
  *   Q&A             — question + answer (USE NEAR-VERBATIM tag for Block A rule)
  *   OPERATIONAL FACT — field name + rendered value
  *   CONTACT INFO    — name + optional role + phone + email (escalation-only)
+ *
+ * `opts.showPrices=false` strips the Price field from STRUCTURED ITEM
+ * citations entirely — defense-in-depth so even if Block A's rule is
+ * weakened, the model never sees the price for items in this tenant.
  */
-function renderCitation(c: RenderedCitation, index: number): string {
+type RenderCitationOpts = {
+  showPrices: boolean;
+};
+
+function renderCitation(
+  c: RenderedCitation,
+  index: number,
+  opts: RenderCitationOpts,
+): string {
   switch (c.kind) {
     case "item":
-      return renderItemCitation(c, index);
+      return renderItemCitation(c, index, opts);
     case "qna":
       return renderQnaCitation(c, index);
     case "operational_fact":
@@ -357,12 +430,20 @@ function renderContactCitation(c: RenderedContactCitation, index: number): strin
   return lines.join("\n");
 }
 
-function renderItemCitation(c: RenderedItemCitation, index: number): string {
+function renderItemCitation(
+  c: RenderedItemCitation,
+  index: number,
+  opts: RenderCitationOpts,
+): string {
   const headBits: string[] = [c.name];
   if (c.brand) headBits.push(`(${c.brand})`);
   const fieldBits: string[] = [];
   if (c.sku) fieldBits.push(`SKU: ${c.sku}`);
-  if (c.priceCents !== null && c.priceCents !== undefined) {
+  if (
+    opts.showPrices &&
+    c.priceCents !== null &&
+    c.priceCents !== undefined
+  ) {
     const major = (c.priceCents / 100).toFixed(2);
     fieldBits.push(`Price: ${c.currency ?? ""} ${major}`.trim());
   }
@@ -526,8 +607,17 @@ export function buildBlockC(args: {
   message: string;
   /** Optional brand aggregate header lines rendered before the [N] citations. */
   brandSummaries?: BrandSummary[];
+  /**
+   * Tenant AI behavior toggles. Currently gates price visibility on item
+   * citations; future render-time toggles flow through the same arg. When
+   * omitted, AI_BEHAVIOR_DEFAULTS apply (no prices, no stock counts,
+   * orders require human).
+   */
+  aiBehavior?: AiBehavior;
 }): string {
   const { citations, history, message, brandSummaries } = args;
+  const aiBehavior = args.aiBehavior ?? AI_BEHAVIOR_DEFAULTS;
+  const renderOpts: RenderCitationOpts = { showPrices: aiBehavior.showPrices };
   const sections: string[] = [];
 
   sections.push("CITATIONS");
@@ -540,7 +630,7 @@ export function buildBlockC(args: {
     sections.push("(none — knowledge base did not return any relevant chunks)");
   } else {
     for (let i = 0; i < citations.length; i++) {
-      sections.push(renderCitation(citations[i]!, i + 1));
+      sections.push(renderCitation(citations[i]!, i + 1, renderOpts));
     }
   }
 
@@ -578,10 +668,16 @@ export function buildPrompt(args: {
   message: string;
   /** Brand aggregate counts prepended to the CITATIONS section. Empty / undefined = no header lines. */
   brandSummaries?: BrandSummary[];
+  /**
+   * Tenant AI behavior toggles (Settings → AI Behavior). Drive Block A's
+   * AI BEHAVIOR RULES section and the price-rendering gate on Block C's
+   * STRUCTURED ITEM citations. When omitted, AI_BEHAVIOR_DEFAULTS apply.
+   */
+  aiBehavior?: AiBehavior;
 }): { system: SystemBlock[]; userMessage: string } {
   return {
     system: [
-      buildBlockA(),
+      buildBlockA({ aiBehavior: args.aiBehavior }),
       buildBlockB({
         tenantName: args.tenantName,
         voice: args.voice,
@@ -593,6 +689,7 @@ export function buildPrompt(args: {
       history: args.history,
       message: args.message,
       brandSummaries: args.brandSummaries,
+      aiBehavior: args.aiBehavior,
     }),
   };
 }

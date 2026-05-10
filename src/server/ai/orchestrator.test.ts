@@ -393,6 +393,102 @@ describe("runBrain — Phase 8b operational facts (tier-1 in Block B)", () => {
   });
 });
 
+describe("runBrain — AI behavior toggles flow into Block A + Block C", () => {
+  it("legacy tenant (no aiBehavior in settings) uses platform defaults", async () => {
+    const { __resetClaudeClientForTests, getClaudeClient } = await import(
+      "./claude-client"
+    );
+    __resetClaudeClientForTests();
+    const client = getClaudeClient();
+    const sendSpy = vi.spyOn(client, "sendReply");
+
+    // mockedTenant.settings has only voiceProfile — no aiBehavior.
+    await runBrain({ tenantId: "tenant-1", message: "hello" });
+
+    const blockA = sendSpy.mock.calls[0]![0]!.system[0]!.text;
+    expect(blockA).toContain("AI BEHAVIOR RULES");
+    // Defaults: prices off, stock off, orders require human.
+    expect(blockA).toContain("NEVER mention prices");
+    expect(blockA).toContain("NEVER mention exact stock counts");
+    expect(blockA).toContain("Escalate to the commercial team");
+  });
+
+  it("tenant.settings.aiBehavior overrides flow through to Block A + Block C", async () => {
+    const { __resetClaudeClientForTests, getClaudeClient } = await import(
+      "./claude-client"
+    );
+    __resetClaudeClientForTests();
+    const client = getClaudeClient();
+    const sendSpy = vi.spyOn(client, "sendReply");
+
+    // Tenant has flipped showPrices=true; other toggles still default.
+    vi.mocked(prisma.tenant.findUnique).mockResolvedValueOnce({
+      ...mockedTenant,
+      settings: {
+        ...mockedTenant.settings,
+        aiBehavior: { showPrices: true },
+      },
+    } as never);
+    // Surface a priced item so Block C has something to gate on.
+    vi.mocked(retrieveItems).mockResolvedValueOnce({
+      items: [
+        {
+          itemId: "i1",
+          name: "Ajax Sirène",
+          category: "ALARM SYSTEM",
+          brand: "Ajax",
+          sku: null,
+          currency: "DZD",
+          priceCents: 1_300_000,
+          availability: "IN_STOCK",
+          description: null,
+          specs: {},
+          vectorScore: 0.9,
+          vectorRank: 1,
+          lexicalScore: null,
+          lexicalRank: null,
+          rrfScore: 0.02,
+        },
+      ],
+      brandSummaries: [],
+    });
+
+    await runBrain({ tenantId: "tenant-1", message: "combien?" });
+
+    const args = sendSpy.mock.calls[0]![0]!;
+    const blockA = args.system[0]!.text;
+    expect(blockA).toContain("Show product prices");
+    expect(blockA).not.toContain("NEVER mention prices");
+    // Block C surfaces the price on the item citation.
+    expect(args.userMessage).toContain("Price: DZD 13000.00");
+  });
+
+  it("malformed aiBehavior in settings falls through to defaults (no throw)", async () => {
+    const { __resetClaudeClientForTests, getClaudeClient } = await import(
+      "./claude-client"
+    );
+    __resetClaudeClientForTests();
+    const client = getClaudeClient();
+    const sendSpy = vi.spyOn(client, "sendReply");
+
+    vi.mocked(prisma.tenant.findUnique).mockResolvedValueOnce({
+      ...mockedTenant,
+      settings: {
+        ...mockedTenant.settings,
+        // String where boolean is expected — the helper falls back.
+        aiBehavior: { showPrices: "yes" },
+      },
+    } as never);
+
+    await expect(
+      runBrain({ tenantId: "tenant-1", message: "combien?" }),
+    ).resolves.toBeDefined();
+
+    const blockA = sendSpy.mock.calls[0]![0]!.system[0]!.text;
+    expect(blockA).toContain("NEVER mention prices");
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // P4r-2 — RealClaudeClient integration
 // ─────────────────────────────────────────────────────────────────────────────

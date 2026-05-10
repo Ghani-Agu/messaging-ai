@@ -1,5 +1,6 @@
 import "server-only";
 import type { Prisma, Role } from "@prisma/client";
+import type { AiBehavior } from "@/lib/validators";
 import { prisma } from "./client";
 
 /**
@@ -153,5 +154,33 @@ export async function updateTenantName(args: {
   await prisma.tenant.update({
     where: { id: args.tenantId },
     data: { name: args.name },
+  });
+}
+
+/**
+ * Patch the `aiBehavior` key inside Tenant.settings without clobbering
+ * other keys (voiceProfile, brandVoice, businessHours, etc.). Runs in a
+ * single transaction so the read-modify-write doesn't race with a
+ * parallel voice-profile save on the same tenant.
+ */
+export async function updateTenantAiBehavior(args: {
+  tenantId: string;
+  aiBehavior: AiBehavior;
+}): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const row = await tx.tenant.findUnique({
+      where: { id: args.tenantId },
+      select: { settings: true },
+    });
+    if (!row) throw new Error(`tenant not found: ${args.tenantId}`);
+    const base =
+      row.settings && typeof row.settings === "object" && !Array.isArray(row.settings)
+        ? (row.settings as Record<string, unknown>)
+        : {};
+    const next = { ...base, aiBehavior: args.aiBehavior };
+    await tx.tenant.update({
+      where: { id: args.tenantId },
+      data: { settings: next as Prisma.InputJsonValue },
+    });
   });
 }

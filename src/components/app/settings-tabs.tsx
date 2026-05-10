@@ -8,6 +8,7 @@ type Tab = { label: string; href: (slug: string) => string };
 
 const TABS: Tab[] = [
   { label: "General", href: (s) => `/${s}/settings/general` },
+  { label: "AI Behavior", href: (s) => `/${s}/settings/ai` },
   { label: "Members", href: (s) => `/${s}/settings/members` },
 ];
 

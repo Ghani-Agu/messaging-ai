@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100kBase from "js-tiktoken/ranks/cl100k_base";
-import { defaultVoiceProfile } from "../../../lib/validators";
 import {
+  AI_BEHAVIOR_DEFAULTS,
+  defaultVoiceProfile,
+} from "../../../lib/validators";
+import {
+  BLOCK_A_BASE_TEXT,
   BLOCK_A_TEXT,
   buildBlockA,
   buildBlockB,
   buildBlockC,
   buildPrompt,
+  renderAiBehaviorRules,
 } from "./system";
 
 // cl100k_base (gpt-4 tokenizer) is the closest publicly available
@@ -33,12 +38,32 @@ const tokens = (s: string) => enc.encode(s).length;
 // category-aware menu replies (the model now presents categories and
 // asks the customer to narrow down rather than picking 5 products
 // itself). ~30 tokens added; measured ~1640.
-const BLOCK_A_BUDGET = 1700;
+// Bumped 1700 → 1950 when Block A became tenant-aware: the AI BEHAVIOR
+// RULES section (Settings page toggles) appends ~240 tokens at platform
+// defaults — fully restrictive copy for pricing / stock counts / orders
+// with the FR fallback phrasings spelled out so the model doesn't have
+// to improvise them.
+const BLOCK_A_BUDGET = 1950;
 
 describe("Block A — platform rules", () => {
-  it("stays under the token budget", () => {
-    const t = tokens(BLOCK_A_TEXT);
+  it("stays under the token budget at platform defaults", () => {
+    const t = tokens(buildBlockA().text);
     expect(t).toBeLessThanOrEqual(BLOCK_A_BUDGET);
+  });
+
+  it("stays under the token budget with the most permissive toggles", () => {
+    const permissive = buildBlockA({
+      aiBehavior: {
+        showPrices: true,
+        showStockCounts: true,
+        requireHumanForOrders: false,
+      },
+    });
+    expect(tokens(permissive.text)).toBeLessThanOrEqual(BLOCK_A_BUDGET);
+  });
+
+  it("BLOCK_A_TEXT is a back-compat alias for BLOCK_A_BASE_TEXT", () => {
+    expect(BLOCK_A_TEXT).toBe(BLOCK_A_BASE_TEXT);
   });
 
   it("contains the load-bearing rules in plain text", () => {
@@ -104,10 +129,49 @@ describe("Block A — platform rules", () => {
 });
 
 describe("buildBlockA / buildBlockB / buildBlockC", () => {
-  it("buildBlockA returns the text block", () => {
+  it("buildBlockA returns a text block that starts with the static base prompt", () => {
     const b = buildBlockA();
     expect(b.type).toBe("text");
-    expect(b.text).toBe(BLOCK_A_TEXT);
+    expect(b.text.startsWith(BLOCK_A_BASE_TEXT)).toBe(true);
+    // The AI BEHAVIOR RULES section is appended.
+    expect(b.text).toContain("AI BEHAVIOR RULES");
+  });
+
+  it("buildBlockA renders restrictive AI BEHAVIOR copy at platform defaults", () => {
+    const b = buildBlockA();
+    expect(b.text).toContain("NEVER mention prices");
+    expect(b.text).toContain("contactez notre équipe commerciale");
+    expect(b.text).toContain("NEVER mention exact stock counts");
+    expect(b.text).toContain("Escalate to the commercial team");
+  });
+
+  it("renderAiBehaviorRules emits the section header, PRICING / STOCK / ORDERS bullets", () => {
+    const r = renderAiBehaviorRules({
+      showPrices: false,
+      showStockCounts: false,
+      requireHumanForOrders: true,
+    });
+    expect(r).toContain("AI BEHAVIOR RULES");
+    expect(r).toContain("END AI BEHAVIOR RULES");
+    expect(r).toMatch(/PRICING:/);
+    expect(r).toMatch(/STOCK COUNTS:/);
+    expect(r).toMatch(/ORDERS:/);
+  });
+
+  it("buildBlockA renders permissive AI BEHAVIOR copy when toggles are on", () => {
+    const b = buildBlockA({
+      aiBehavior: {
+        showPrices: true,
+        showStockCounts: true,
+        requireHumanForOrders: false,
+      },
+    });
+    expect(b.text).toContain("Show product prices");
+    expect(b.text).not.toContain("NEVER mention prices");
+    expect(b.text).toContain("Show stock counts when relevant");
+    expect(b.text).not.toContain("NEVER mention exact stock counts");
+    expect(b.text).toContain("may confirm product interest");
+    expect(b.text).not.toContain("Escalate to the commercial team");
   });
 
   it("buildBlockB renders tenant identity and voice profile", () => {
@@ -248,6 +312,9 @@ describe("buildBlockA / buildBlockB / buildBlockC", () => {
       ],
       history: [],
       message: "Do you have Macbooks?",
+      // Opt this rendering test into showing prices — the gating
+      // behavior gets its own coverage below.
+      aiBehavior: { ...AI_BEHAVIOR_DEFAULTS, showPrices: true },
     });
     expect(c).toContain("[1] STRUCTURED ITEM — Macbook Pro M3 (Apple)");
     expect(c).toContain("SKU: MBP-M3-14");
@@ -258,6 +325,37 @@ describe("buildBlockA / buildBlockB / buildBlockC", () => {
     // Reserved _-prefix keys must NOT leak into the prompt.
     expect(c).not.toContain("_template_id");
     expect(c).not.toContain("laptop");
+  });
+
+  it("buildBlockC omits the Price line when aiBehavior.showPrices is false", () => {
+    const itemCitation = {
+      kind: "item" as const,
+      name: "Macbook Pro M3",
+      brand: "Apple" as string | null,
+      sku: "MBP-M3-14",
+      currency: "USD",
+      priceCents: 220_000,
+      availability: "IN_STOCK" as const,
+    };
+    const restrictive = buildBlockC({
+      citations: [itemCitation],
+      history: [],
+      message: "Combien ?",
+      aiBehavior: AI_BEHAVIOR_DEFAULTS, // showPrices: false
+    });
+    expect(restrictive).not.toContain("Price:");
+    // SKU + availability still surface — only the price is gated.
+    expect(restrictive).toContain("SKU: MBP-M3-14");
+    expect(restrictive).toContain("Availability: IN_STOCK");
+
+    // Default invocation (no aiBehavior arg) is equivalent to passing
+    // the platform defaults — prices stay hidden.
+    const noArg = buildBlockC({
+      citations: [itemCitation],
+      history: [],
+      message: "Combien ?",
+    });
+    expect(noArg).not.toContain("Price:");
   });
 
   it("buildBlockC renders single-category brand summary in the compact 'all in CAT' form", () => {
@@ -609,8 +707,42 @@ describe("buildPrompt", () => {
       message: "test",
     });
     expect(result.system).toHaveLength(2);
-    expect(result.system[0]!.text).toBe(BLOCK_A_TEXT);
+    // Block A now includes the AI BEHAVIOR RULES suffix; the static
+    // base text is the prefix.
+    expect(result.system[0]!.text.startsWith(BLOCK_A_BASE_TEXT)).toBe(true);
+    expect(result.system[0]!.text).toContain("AI BEHAVIOR RULES");
     expect(result.system[1]!.text).toContain("Business name: Acme");
     expect(result.userMessage).toContain("NEW CUSTOMER MESSAGE\ntest");
+  });
+
+  it("threads aiBehavior into both Block A and Block C", () => {
+    const voice = defaultVoiceProfile();
+    const result = buildPrompt({
+      tenantName: "Acme",
+      voice,
+      citations: [
+        {
+          kind: "item",
+          name: "Ajax Sirène",
+          brand: "Ajax",
+          sku: null,
+          currency: "DZD",
+          priceCents: 1_300_000,
+          availability: "IN_STOCK",
+        },
+      ],
+      history: [],
+      message: "combien ?",
+      aiBehavior: {
+        showPrices: true,
+        showStockCounts: false,
+        requireHumanForOrders: true,
+      },
+    });
+    // Block A picks up the permissive PRICING rule.
+    expect(result.system[0]!.text).toContain("Show product prices");
+    expect(result.system[0]!.text).not.toContain("NEVER mention prices");
+    // Block C surfaces the price field on the item citation.
+    expect(result.userMessage).toContain("Price: DZD 13000.00");
   });
 });

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_BEHAVIOR_DEFAULTS,
+  aiBehaviorSchema,
   defaultVoiceProfile,
+  getAiBehaviorForTenant,
   getVoiceProfile,
   voiceProfileSchema,
 } from "./validators";
@@ -74,5 +77,102 @@ describe("getVoiceProfile()", () => {
       businessHours: { tz: "Africa/Algiers" },
     });
     expect(p.tone).toBe("friendly"); // no voiceProfile field → default
+  });
+});
+
+describe("aiBehaviorSchema", () => {
+  it("parses a fully-specified object verbatim", () => {
+    const parsed = aiBehaviorSchema.parse({
+      showPrices: true,
+      showStockCounts: true,
+      requireHumanForOrders: false,
+    });
+    expect(parsed).toEqual({
+      showPrices: true,
+      showStockCounts: true,
+      requireHumanForOrders: false,
+    });
+  });
+
+  it("fills defaults for missing fields", () => {
+    expect(aiBehaviorSchema.parse({})).toEqual(AI_BEHAVIOR_DEFAULTS);
+    expect(aiBehaviorSchema.parse({ showPrices: true })).toEqual({
+      showPrices: true,
+      showStockCounts: false,
+      requireHumanForOrders: true,
+    });
+  });
+
+  it("rejects non-boolean values for any toggle", () => {
+    expect(() =>
+      aiBehaviorSchema.parse({ showPrices: "yes" }),
+    ).toThrow();
+    expect(() =>
+      aiBehaviorSchema.parse({ showStockCounts: 1 }),
+    ).toThrow();
+    expect(() =>
+      aiBehaviorSchema.parse({ requireHumanForOrders: null }),
+    ).toThrow();
+  });
+
+  it("AI_BEHAVIOR_DEFAULTS matches the platform default contract", () => {
+    expect(AI_BEHAVIOR_DEFAULTS).toEqual({
+      showPrices: false,
+      showStockCounts: false,
+      requireHumanForOrders: true,
+    });
+  });
+});
+
+describe("getAiBehaviorForTenant()", () => {
+  it("returns the platform defaults when settings has no aiBehavior key", () => {
+    expect(getAiBehaviorForTenant({})).toEqual(AI_BEHAVIOR_DEFAULTS);
+  });
+
+  it("merges per-toggle overrides with defaults for unspecified fields", () => {
+    expect(
+      getAiBehaviorForTenant({
+        aiBehavior: { showPrices: true },
+      }),
+    ).toEqual({
+      showPrices: true,
+      showStockCounts: false,
+      requireHumanForOrders: true,
+    });
+  });
+
+  it("returns defaults for null / undefined / non-object settings", () => {
+    expect(getAiBehaviorForTenant(null)).toEqual(AI_BEHAVIOR_DEFAULTS);
+    expect(getAiBehaviorForTenant(undefined)).toEqual(AI_BEHAVIOR_DEFAULTS);
+    expect(getAiBehaviorForTenant("not an object")).toEqual(
+      AI_BEHAVIOR_DEFAULTS,
+    );
+  });
+
+  it("returns defaults when aiBehavior is malformed", () => {
+    expect(
+      getAiBehaviorForTenant({ aiBehavior: { showPrices: "yes" } }),
+    ).toEqual(AI_BEHAVIOR_DEFAULTS);
+  });
+
+  it("never returns the frozen defaults object reference (caller may mutate)", () => {
+    const result = getAiBehaviorForTenant({});
+    expect(result).not.toBe(AI_BEHAVIOR_DEFAULTS);
+    // Mutating the returned object must not poison the shared defaults.
+    result.showPrices = true;
+    expect(AI_BEHAVIOR_DEFAULTS.showPrices).toBe(false);
+  });
+
+  it("co-exists with voiceProfile in the same settings object", () => {
+    const settings = {
+      voiceProfile: { tone: "formal" as const },
+      aiBehavior: { requireHumanForOrders: false },
+    };
+    expect(getAiBehaviorForTenant(settings)).toEqual({
+      showPrices: false,
+      showStockCounts: false,
+      requireHumanForOrders: false,
+    });
+    expect(getVoiceProfile(settings).tone).toBe("formal");
   });
 });

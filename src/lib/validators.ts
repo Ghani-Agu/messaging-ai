@@ -50,6 +50,34 @@ export const voiceProfileSchema = z.object({
 });
 export type VoiceProfile = z.infer<typeof voiceProfileSchema>;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AI behavior toggles
+//
+// Operator-facing knobs that shape what the brain shares with customers,
+// independent of the voice profile (tone/formality/few-shot). Lives at
+// Tenant.settings.aiBehavior alongside voiceProfile. Defaults match the
+// WhatsApp-first SMB pattern most onboarding tenants want: minimal info
+// sharing (no exact prices, no exact stock counts) and order escalation
+// to a human. Per-tenant overrides flip individual toggles.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const aiBehaviorSchema = z.object({
+  showPrices: z.boolean().default(false),
+  showStockCounts: z.boolean().default(false),
+  requireHumanForOrders: z.boolean().default(true),
+});
+export type AiBehavior = z.infer<typeof aiBehaviorSchema>;
+
+/**
+ * Platform-wide defaults. Frozen so callers can't accidentally mutate the
+ * shared reference between requests.
+ */
+export const AI_BEHAVIOR_DEFAULTS: AiBehavior = Object.freeze({
+  showPrices: false,
+  showStockCounts: false,
+  requireHumanForOrders: true,
+}) as AiBehavior;
+
 /**
  * The full Tenant.settings JSON shape. `passthrough` so legacy fields
  * (defaultLanguage / brandVoice / businessHours from Phase 1 seed) and any
@@ -61,6 +89,7 @@ export const tenantSettingsSchema = z
     brandVoice: z.string().optional(),
     businessHours: z.object({ tz: z.string() }).optional(),
     voiceProfile: voiceProfileSchema.optional(),
+    aiBehavior: aiBehaviorSchema.optional(),
   })
   .passthrough();
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
@@ -84,6 +113,24 @@ export function getVoiceProfile(settings: unknown): VoiceProfile {
   if (!parsed.success) return defaultVoiceProfile();
   if (!parsed.data.voiceProfile) return defaultVoiceProfile();
   return parsed.data.voiceProfile;
+}
+
+/**
+ * Read the AI behavior toggles out of an arbitrary JSON value. Falls back
+ * to AI_BEHAVIOR_DEFAULTS for missing / malformed input. Never throws —
+ * the brain (and Block A renderer) must always have a fully-populated
+ * toggle object to gate on. Returns a fresh object so callers can't
+ * mutate the shared defaults through the return value.
+ */
+export function getAiBehaviorForTenant(settings: unknown): AiBehavior {
+  const fallback = (): AiBehavior => ({ ...AI_BEHAVIOR_DEFAULTS });
+  const parsed = tenantSettingsSchema.safeParse(settings);
+  if (!parsed.success) return fallback();
+  if (!parsed.data.aiBehavior) return fallback();
+  // aiBehaviorSchema fills any individually-missing fields via .default()
+  // when parsed via tenantSettingsSchema, so the result is guaranteed
+  // fully populated.
+  return { ...parsed.data.aiBehavior };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
