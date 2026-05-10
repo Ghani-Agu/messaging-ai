@@ -17,18 +17,19 @@ import type {
  * every tenant, Block B is identical within a tenant. Block C (the
  * per-request runtime block) lives on the user turn, not here.
  *
- * Block A target: ≤ 1150 input tokens (asserted by the unit test).
+ * Block A target: ≤ 1400 input tokens (asserted by the unit test).
  * Block A measured: 594 tokens (Phase 4 initial); briefly 794 during
  * the P4r-3 schema-split attempt; 738 after revert; ~1119 after the
- * P4r-7 Algerian-Darija coaching. The ~+380 tokens vs P4r-6 are
- * load-bearing for product quality with Algerian customers — the
- * brain-eval at P4r-6 found that without explicit Algerian vocabulary
- * guidance, both Sonnet 4.5 and 4.6 default to French or MSA on
- * Darija inputs, which sounds foreign to Algerian customers. The
- * ceiling bump from 800→1100 is intentional; future prompt edits
- * should preserve the Darija coaching even at token cost. The
- * platform serves Algerian businesses, not generic Maghrebi —
- * never broaden the LANGUAGE HANDLING section to "Maghrebi Darija".
+ * P4r-7 Algerian-Darija coaching; ~1300 after the forbidden-Moroccan
+ * + French-fallback additions. The added tokens are load-bearing
+ * for product quality with Algerian customers — without an explicit
+ * forbidden list, the model silently substitutes Moroccan vocab
+ * (kankteb, zwina, dyal, safi, bzaf) into otherwise-Algerian
+ * replies, which Algerian customers immediately reject. The
+ * "use French if unsure" fallback routes uncertainty away from the
+ * wrong register entirely. Never broaden the LANGUAGE HANDLING
+ * section to "Maghrebi Darija" — the platform serves Algerian
+ * businesses specifically.
  *
  * Pure functions — no I/O, no globals, easy to unit-test.
  */
@@ -72,7 +73,7 @@ LANGUAGE HANDLING
 - Supported: Arabic (MSA), French, English, ALGERIAN Darija.
 - Mirror register too. Do NOT introduce religious, regional, or familial terms (inshallah, habibi, khouya, mon frère, etc.) unless the customer used them first.
 
-ALGERIAN DARIJA — specifically Algerian, NOT Moroccan, NOT generic Maghrebi. The platform serves Algerian businesses; default to Algerian.
+ALGERIAN DARIJA — specifically Algerian, NOT Moroccan, NOT generic Maghrebi. The platform serves Algerian businesses.
 - NEVER use Moroccan vocabulary. NEVER default to MSA. NEVER default to French when the customer wrote Darija.
 - Algerian markers in customer messages:
     - Arabic-script: واش، راني، راكم، بصح، برك، نَدير، كيفاش، خدامين
@@ -88,7 +89,20 @@ ALGERIAN DARIJA — specifically Algerian, NOT Moroccan, NOT generic Maghrebi. T
     - Customer: "wach 3andkom des horaires?" → "Salam khouya! Ah, rana mfto7in men 9h jusqu'à 17h..."
     - Customer: "شحال السعر متاع هاد المنتج؟" → "السلام، السعر متاعه هو..."
     - Customer (mix): "Bonjour, 3afak je veux nchouf les prix" → "Bonjour khouya! Ah, ndir-lek une liste..."
-- If unsure between Algerian and Moroccan Darija, default to Algerian.
+
+FORBIDDEN MOROCCAN VOCABULARY (never use; left = Moroccan → right = Algerian):
+- kankteb / kandir / kanmshi (Moroccan continuous prefix ka-) → rani nakteb / rani ndir / rani nemshi
+- zwina / zwin → mli7a / mli7 (or shbab)
+- bzaf → barcha or bazzaf (note: bazzaf with -ZZ- is Algerian; bzaf is Moroccan)
+- safi → barka or khlas
+- dyal → ta3 or nta3
+- wakha → wah or OK
+- flous → drahem
+- smitek → ismek
+- shnu → wash or wesh
+Acceptable in both regions (do NOT reject): khoya / khouya, lyom, zayd, achmen / ashmen.
+
+If unsure whether a word is Algerian or Moroccan, use the French equivalent. Algerian Darija naturally code-switches with French — "les détails", "l'équipe commerciale", "contacter", "disponible", "marhba" are idiomatic in Algerian replies. When in doubt: 100% Algerian, OR Algerian + French. Never guess between Algerian and Moroccan.
 
 OTHER LANGUAGES
 - ARABIC (MSA): Modern Standard Arabic, polite and professional, not classical.

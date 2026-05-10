@@ -17,11 +17,13 @@ import {
 const enc = new Tiktoken(cl100kBase);
 const tokens = (s: string) => enc.encode(s).length;
 
-// P4r-7 bumped 800 → 1150 to make room for explicit Algerian Darija
-// vocabulary coaching (the original 1100 estimate ran ~19 tokens short
-// after a tightening pass; the substantive content stays). See the
-// system.ts comment for the rationale on preserving the Darija block.
-const BLOCK_A_BUDGET = 1150;
+// P4r-7 bumped 800 → 1150 for the initial Algerian-Darija coaching.
+// Bumped 1150 → 1400 for the forbidden-Moroccan vocabulary list +
+// "use French if unsure" fallback rule (the substitute-for-Moroccan
+// register lock — WBP eval showed Algerian customers reject Moroccan-
+// flavored replies even when the rest of the reply is correct).
+// Measured ~1377 after that change. See the system.ts comment.
+const BLOCK_A_BUDGET = 1400;
 
 describe("Block A — platform rules", () => {
   it("stays under the token budget", () => {
@@ -45,7 +47,19 @@ describe("Block A — platform rules", () => {
     expect(BLOCK_A_TEXT).toMatch(/kifach/);
     expect(BLOCK_A_TEXT).toMatch(/bessah/);
     expect(BLOCK_A_TEXT).toMatch(/rani nakteb/);
-    expect(BLOCK_A_TEXT).toMatch(/default to Algerian/);
+    // Forbidden-Moroccan section is load-bearing — without it the model
+    // silently substitutes Moroccan vocab (kankteb / zwina / dyal /
+    // safi) into Algerian replies, which Algerian customers reject.
+    expect(BLOCK_A_TEXT).toMatch(/FORBIDDEN MOROCCAN/);
+    expect(BLOCK_A_TEXT).toMatch(/kankteb/);
+    expect(BLOCK_A_TEXT).toMatch(/zwina/);
+    expect(BLOCK_A_TEXT).toMatch(/\bsafi\b/);
+    expect(BLOCK_A_TEXT).toMatch(/\bdyal\b/);
+    // The "use French if unsure" fallback routes uncertainty away from
+    // the wrong register entirely — replaces the older "default to
+    // Algerian" rule which implicitly admitted both registers.
+    expect(BLOCK_A_TEXT).toMatch(/use the French equivalent/);
+    expect(BLOCK_A_TEXT).toMatch(/Algerian \+ French/);
     // All five escalation enum values appear.
     for (const reason of [
       "EXPLICIT_REQUEST",
@@ -71,6 +85,11 @@ describe("Block A — platform rules", () => {
     // The "inshallah is fine" guidance was struck from FRENCH per §4.
     // We allow the word in the don't-introduce list, but not as encouragement.
     expect(BLOCK_A_TEXT).not.toMatch(/inshallah.*(fine|ok|natural|mirror)/i);
+    // The old "default to Algerian" fallback was removed when the
+    // forbidden-Moroccan list landed — uncertainty now routes to French,
+    // not to a guessed register. The rule lived as a standalone sentence
+    // (case-insensitive match) prior to removal; assert its disappearance.
+    expect(BLOCK_A_TEXT).not.toMatch(/default to Algerian/i);
   });
 });
 
