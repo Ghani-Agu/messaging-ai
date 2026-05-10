@@ -143,6 +143,26 @@ const QUERY_BANK: EvalQuery[] = [
     expectedBehavior:
       "Should hit the seeded shipping Q&A and use its answer near-verbatim.",
   },
+  // Two Darija rows targeting registers the model historically slips on
+  // (WBP user reports + earlier eval runs).
+  {
+    id: "darija-arabizi-product",
+    description: "Darija Arabizi — casual product price ask",
+    message: "Salam khoya, b9adach yswa Macbook Pro M3 3andkom?",
+    expectedLanguage: "darija",
+    expectedBehavior:
+      "Reply in Algerian Arabizi with the Macbook Pro M3 DZD price. No Moroccan vocab " +
+      "(kankteb / zwina / dyal / safi / bzaf / flous). Code-switching with French OK.",
+  },
+  {
+    id: "darija-arabic-script-complaint",
+    description: "Darija Arabic-script — order complaint / escalation",
+    message: "السلام، راني خايف يا سيدي، طلبيتي ما وصلتش وراني نستنى فيها من زمان",
+    expectedLanguage: "darija",
+    expectedBehavior:
+      "Reply in Algerian Arabic-script Darija with empathy; likely escalate " +
+      "NEGATIVE_SENTIMENT. Algerian markers (راني / واش / بصح / متاع), no MSA drift.",
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -336,6 +356,60 @@ const FRANC_TO_OURS: Record<string, SupportedReplyLanguage | "unknown"> = {
   und: "unknown",
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Moroccan-vocab anti-pattern detector — applies to claimed-darija replies
+// only. The user-facing failure mode this guards: replies that are mostly
+// Algerian but slip in one Moroccan word (kankteb, zwina, dyal, safi, bzaf,
+// flous), which Algerian customers reject on sight. Pair with Block A's
+// FORBIDDEN MOROCCAN VOCABULARY section — Block A coaches the model, this
+// validator catches regressions.
+//
+// Targeted at Arabizi/Latin-script replies (Moroccan substitutions show up
+// in Latin form most often). Arabic-script Moroccan vs Algerian is harder
+// to disambiguate at the word level — e.g. "بزاف" is used in both — so the
+// Latin list is the safe ground.
+//
+// Space-padding: the user-supplied list bakes in ` bzaf ` / ` safi ` /
+// ` dyal ` (etc.) to avoid false positives when those letters appear inside
+// other words. We normalize the reply by lowercasing it, replacing
+// punctuation with spaces, and bracketing with leading/trailing spaces, so
+// the literal substring check works around start/end and against punctuation.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MOROCCAN_FORBIDDEN_WORDS = [
+  "kankteb",
+  "kandir",
+  "kanmshi",
+  "zwina",
+  "zwin",
+  " bzaf ",
+  " safi ",
+  " dyal ",
+  " wakha ",
+  " flous ",
+  " smitek ",
+  " shnu ",
+] as const;
+
+function normalizeForVocabCheck(reply: string): string {
+  // Lowercase, turn punctuation/newlines into spaces, collapse repeats,
+  // bracket with spaces so " bzaf " matches at start/end and around commas.
+  const lower = reply.toLowerCase();
+  const withSpaces = lower.replace(/[^a-z0-9؀-ۿ]+/g, " ");
+  return ` ${withSpaces.trim().replace(/\s+/g, " ")} `;
+}
+
+function detectMoroccanVocab(reply: string): string[] {
+  const haystack = normalizeForVocabCheck(reply);
+  const hits: string[] = [];
+  for (const needle of MOROCCAN_FORBIDDEN_WORDS) {
+    if (haystack.includes(needle.toLowerCase())) {
+      hits.push(needle.trim());
+    }
+  }
+  return hits;
+}
+
 function classifyDarijaScript(reply: string): "arabizi" | "arabic-script" | "neither" {
   const hasArabizi = /\d[a-z]+|[a-z]+\d/i.test(reply); // 3andkom, wa7ed, men9oul
   const hasArabicScript = /[؀-ۿ]/.test(reply);
@@ -446,6 +520,15 @@ async function runEvalRow(
   for (const used of result.citationsUsed) {
     if (used < 1 || used > result.citations.length) {
       failedChecks.push(`citation_index_out_of_range:${used}`);
+    }
+  }
+  // Moroccan-vocab anti-pattern check — only for rows where the customer
+  // expected a Darija reply (the register risk we care about). Catches
+  // regressions in the Block A FORBIDDEN MOROCCAN VOCABULARY coaching.
+  if (query.expectedLanguage === "darija") {
+    const moroccanHits = detectMoroccanVocab(result.reply);
+    for (const word of moroccanHits) {
+      failedChecks.push(`moroccan_vocab_detected:${word}`);
     }
   }
 
