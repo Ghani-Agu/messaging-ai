@@ -11,8 +11,11 @@ import { Badge } from "@/components/ui/badge";
 import {
   signInWithEmail,
   signInWithGoogle,
+  signInWithPassword,
   type EmailSignInState,
+  type PasswordSignInState,
 } from "@/server/auth/actions";
+import { cn } from "@/lib/utils";
 import { easeOutExpo, durationMedium } from "@/lib/motion";
 
 type AuthMode = "login" | "signup";
@@ -44,8 +47,11 @@ const COPY: Record<AuthMode, {
 };
 
 const initialState: EmailSignInState = { status: "idle" };
+const initialPasswordState: PasswordSignInState = { status: "idle" };
 
 const DEFAULT_EYEBROW = "Secure access";
+
+type LoginMethod = "magic-link" | "password";
 
 export function AuthCard({
   mode,
@@ -56,6 +62,15 @@ export function AuthCard({
 }) {
   const copy = COPY[mode];
   const [state, formAction, pending] = useActionState(signInWithEmail, initialState);
+  const [pwState, pwFormAction, pwPending] = useActionState(
+    signInWithPassword,
+    initialPasswordState,
+  );
+  // Signup is magic-link / Google only — password sign-up doesn't exist
+  // yet (existing accounts set their first password via the reset flow).
+  // The method-toggle only renders for login mode.
+  const [method, setMethod] = useState<LoginMethod>("magic-link");
+  const showPasswordPath = mode === "login" && method === "password";
 
   return (
     <motion.div
@@ -113,39 +128,115 @@ export function AuthCard({
           <div className="h-px flex-1 bg-[var(--border-subtle)]" />
         </div>
 
-        <form action={formAction} className="space-y-3" noValidate>
-          <label className="block">
-            <span className="mb-1.5 block text-body-sm text-[var(--text-secondary)]">
-              Work email
-            </span>
-            <input
-              type="email"
-              name="email"
-              required
-              autoComplete="email"
-              placeholder="you@company.com"
-              disabled={pending}
-              className="block h-11 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3.5 text-body text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] transition-colors duration-150 ease-out hover:border-[var(--border-strong)] focus:border-[var(--accent-base)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-base)]/30 disabled:opacity-60"
-            />
-          </label>
+        {mode === "login" ? (
+          <div className="mb-4 grid grid-cols-2 gap-2" role="tablist" aria-label="Sign-in method">
+            <MethodTab
+              active={method === "magic-link"}
+              onClick={() => setMethod("magic-link")}
+            >
+              Magic link
+            </MethodTab>
+            <MethodTab
+              active={method === "password"}
+              onClick={() => setMethod("password")}
+            >
+              Password
+            </MethodTab>
+          </div>
+        ) : null}
 
-          {state.status === "error" ? (
-            <p role="alert" className="text-body-sm text-[var(--danger)]">
-              {state.message}
-            </p>
-          ) : null}
+        {showPasswordPath ? (
+          <form action={pwFormAction} className="space-y-3" noValidate>
+            <label className="block">
+              <span className="mb-1.5 block text-body-sm text-[var(--text-secondary)]">
+                Work email
+              </span>
+              <input
+                type="email"
+                name="email"
+                required
+                autoComplete="email"
+                placeholder="you@company.com"
+                disabled={pwPending}
+                aria-invalid={pwState.status === "error" ? true : undefined}
+                className="block h-11 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3.5 text-body text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] transition-colors duration-150 ease-out hover:border-[var(--border-strong)] focus:border-[var(--accent-base)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-base)]/30 disabled:opacity-60 aria-[invalid=true]:border-[var(--danger)]"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-body-sm text-[var(--text-secondary)]">
+                  Password
+                </span>
+                <Link
+                  href="/reset-password"
+                  className="text-caption font-medium text-[var(--accent-hover)] hover:underline"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+              <input
+                type="password"
+                name="password"
+                required
+                autoComplete="current-password"
+                disabled={pwPending}
+                aria-invalid={pwState.status === "error" ? true : undefined}
+                className="block h-11 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3.5 text-body text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] transition-colors duration-150 ease-out hover:border-[var(--border-strong)] focus:border-[var(--accent-base)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-base)]/30 disabled:opacity-60 aria-[invalid=true]:border-[var(--danger)]"
+              />
+            </label>
 
-          <MagneticButton type="submit" pending={pending}>
-            {pending ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                Sending…
-              </>
-            ) : (
-              copy.cta
-            )}
-          </MagneticButton>
-        </form>
+            {pwState.status === "error" ? (
+              <p role="alert" className="text-body-sm text-[var(--danger)]">
+                {pwState.message}
+              </p>
+            ) : null}
+
+            <MagneticButton type="submit" pending={pwPending}>
+              {pwPending ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Signing in…
+                </>
+              ) : (
+                "Sign in"
+              )}
+            </MagneticButton>
+          </form>
+        ) : (
+          <form action={formAction} className="space-y-3" noValidate>
+            <label className="block">
+              <span className="mb-1.5 block text-body-sm text-[var(--text-secondary)]">
+                Work email
+              </span>
+              <input
+                type="email"
+                name="email"
+                required
+                autoComplete="email"
+                placeholder="you@company.com"
+                disabled={pending}
+                className="block h-11 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3.5 text-body text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] transition-colors duration-150 ease-out hover:border-[var(--border-strong)] focus:border-[var(--accent-base)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-base)]/30 disabled:opacity-60"
+              />
+            </label>
+
+            {state.status === "error" ? (
+              <p role="alert" className="text-body-sm text-[var(--danger)]">
+                {state.message}
+              </p>
+            ) : null}
+
+            <MagneticButton type="submit" pending={pending}>
+              {pending ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Sending…
+                </>
+              ) : (
+                copy.cta
+              )}
+            </MagneticButton>
+          </form>
+        )}
 
         <p className="mt-6 text-center text-body-sm text-[var(--text-tertiary)]">
           {copy.switchPrompt}{" "}
@@ -162,6 +253,41 @@ export function AuthCard({
         By continuing you agree to the terms of service and privacy policy.
       </p>
     </motion.div>
+  );
+}
+
+/**
+ * Two-up segmented tab for picking sign-in method (magic link vs
+ * password). Visually mirrors the language pills on the playground
+ * — same role="tab" + aria-selected pattern.
+ */
+function MethodTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "inline-flex h-9 items-center justify-center rounded-md px-3 text-body-sm font-medium",
+        "transition-[background-color,color,border-color] duration-150 ease-out",
+        "border",
+        active
+          ? "border-[color-mix(in_oklab,var(--accent-base)_40%,transparent)] bg-[color-mix(in_oklab,var(--accent-base)_15%,transparent)] text-[var(--text-primary)]"
+          : "border-[var(--border-subtle)] bg-transparent text-[var(--text-secondary)] hover:border-[var(--border-default)] hover:text-[var(--text-primary)]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-surface)]",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

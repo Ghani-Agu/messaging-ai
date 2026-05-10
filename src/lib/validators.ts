@@ -51,6 +51,61 @@ export const voiceProfileSchema = z.object({
 export type VoiceProfile = z.infer<typeof voiceProfileSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Passwords (Credentials provider)
+//
+// Lives here so signup, password-reset, and the Credentials authorize
+// callback share one schema. No max length cap — bcrypt's own 72-byte
+// truncation is the practical ceiling, and applying that as a Zod max
+// would silently reject otherwise-valid passphrases. Block a tiny
+// hardcoded list of the most common credential-stuffing targets; no
+// external HIBP call (would leak prefix hashes per request).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Lowercased substring blocklist. A submitted password fails if its
+ * lowercased form CONTAINS any entry — so "Password1" fails on the
+ * "password" substring even though it technically passes length /
+ * letter / digit. Twenty entries is enough to cover the top-of-funnel
+ * credential-stuffing hits without surprising legitimate users.
+ */
+const COMMON_PASSWORD_BLOCKLIST: readonly string[] = [
+  "password",
+  "passw0rd",
+  "12345678",
+  "123456789",
+  "qwerty",
+  "qwerty123",
+  "letmein",
+  "welcome",
+  "admin123",
+  "iloveyou",
+  "monkey123",
+  "abc12345",
+  "1qaz2wsx",
+  "trustno1",
+  "sunshine",
+  "princess",
+  "football",
+  "baseball",
+  "starwars",
+  "azerty123",
+];
+
+export function isBlocklistedPassword(input: string): boolean {
+  const lower = input.toLowerCase();
+  return COMMON_PASSWORD_BLOCKLIST.some((entry) => lower.includes(entry));
+}
+
+export const passwordSchema = z
+  .string()
+  .min(8, "Password must be at least 8 characters")
+  .regex(/[A-Za-z]/, "Password must include a letter")
+  .regex(/[0-9]/, "Password must include a digit")
+  .refine((s) => !isBlocklistedPassword(s), {
+    message: "That password is too common — please pick another",
+  });
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AI behavior toggles
 //
 // Operator-facing knobs that shape what the brain shares with customers,

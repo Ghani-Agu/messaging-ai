@@ -5,6 +5,8 @@ import {
   defaultVoiceProfile,
   getAiBehaviorForTenant,
   getVoiceProfile,
+  isBlocklistedPassword,
+  passwordSchema,
   voiceProfileSchema,
 } from "./validators";
 
@@ -174,5 +176,54 @@ describe("getAiBehaviorForTenant()", () => {
       requireHumanForOrders: false,
     });
     expect(getVoiceProfile(settings).tone).toBe("formal");
+  });
+});
+
+describe("passwordSchema", () => {
+  it("accepts a password meeting all rules (8+ chars, letter + digit, not common)", () => {
+    expect(passwordSchema.safeParse("abc123ab").success).toBe(true);
+    // Long passphrases pass — no upper bound on length.
+    expect(
+      passwordSchema.safeParse("correct horse battery staple 9").success,
+    ).toBe(true);
+  });
+
+  it("rejects passwords shorter than 8 characters", () => {
+    const r = passwordSchema.safeParse("abc1");
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0]?.message).toMatch(/at least 8/);
+    }
+  });
+
+  it("rejects passwords with no digit", () => {
+    const r = passwordSchema.safeParse("abcdefgh");
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects passwords with no letter (and that are also in the blocklist)", () => {
+    const r = passwordSchema.safeParse("12345678");
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects common-password substrings even when length / digit rules pass", () => {
+    // "Password1" satisfies length + letter + digit but contains the
+    // blocklisted substring "password" (case-insensitive).
+    expect(passwordSchema.safeParse("Password1").success).toBe(false);
+    expect(passwordSchema.safeParse("qwerty1234").success).toBe(false);
+    expect(passwordSchema.safeParse("Letmein99").success).toBe(false);
+  });
+});
+
+describe("isBlocklistedPassword", () => {
+  it("case-insensitive substring match against the blocklist", () => {
+    expect(isBlocklistedPassword("password")).toBe(true);
+    expect(isBlocklistedPassword("PaSsWoRd")).toBe(true);
+    expect(isBlocklistedPassword("xPassword1")).toBe(true);
+  });
+
+  it("returns false for strings that don't contain any blocklisted entry", () => {
+    expect(isBlocklistedPassword("zephyr-melody-83")).toBe(false);
+    expect(isBlocklistedPassword("abc123ab")).toBe(false);
   });
 });
