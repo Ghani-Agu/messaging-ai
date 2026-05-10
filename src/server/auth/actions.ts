@@ -16,8 +16,20 @@ const emailSchema = z
   .toLowerCase()
   .email("Enter a valid email address.");
 
-export async function signInWithGoogle(): Promise<void> {
-  await signIn("google", { redirectTo: "/post-auth" });
+/**
+ * Whitelist of acceptable post-auth callback paths. Anything not on this
+ * list (or with `..`/protocol prefix) silently falls back to /post-auth
+ * — open-redirect defense in depth.
+ */
+function safeCallback(input: FormDataEntryValue | null): string {
+  if (typeof input !== "string" || input.length === 0) return "/post-auth";
+  if (input.startsWith("/invitations/")) return input;
+  return "/post-auth";
+}
+
+export async function signInWithGoogle(formData?: FormData): Promise<void> {
+  const next = safeCallback(formData?.get("next") ?? null);
+  await signIn("google", { redirectTo: next });
 }
 
 export type EmailSignInState =
@@ -38,7 +50,8 @@ export async function signInWithEmail(
   // signIn() throws a NEXT_REDIRECT internally on success — this function
   // never returns in the success path, the user is redirected to
   // /verify-request. Errors that aren't redirects bubble up.
-  await signIn("resend", { email: parsed.data, redirectTo: "/post-auth" });
+  const next = safeCallback(formData.get("next"));
+  await signIn("resend", { email: parsed.data, redirectTo: next });
   return { status: "idle" };
 }
 
@@ -76,11 +89,12 @@ export async function signInWithPassword(
       message: "Enter your email and password.",
     };
   }
+  const next = safeCallback(formData.get("next"));
   try {
     await signIn("credentials", {
       email: parsed.data.email,
       password: parsed.data.password,
-      redirectTo: "/post-auth",
+      redirectTo: next,
     });
     // signIn redirects on success — this line never runs.
     return { status: "idle" };

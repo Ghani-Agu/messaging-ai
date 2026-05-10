@@ -94,7 +94,10 @@ export async function POST(req: Request): Promise<Response> {
   // because resolveContext will throw).
   let ctx;
   try {
-    ctx = await requireTenantContext(body.tenantSlug, { minRole: "VIEWER" });
+    ctx = await requireTenantContext(body.tenantSlug, {
+      minRole: "VIEWER",
+      requiredPermission: "playground:view",
+    });
   } catch (err) {
     // Either no session, no membership, or role too low. We don't
     // distinguish — the page-level guard makes this unreachable in

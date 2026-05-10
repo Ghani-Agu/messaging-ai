@@ -34,7 +34,10 @@ export async function loadQnaPairs(
   slug: string,
   filters?: { language?: string; search?: string },
 ): Promise<{ pairs: QnaPairSummary[]; count: number }> {
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "VIEWER",
+    requiredPermission: "qna:view",
+  });
   const [pairs, count] = await Promise.all([
     listQnaPairsForTenant({
       tenantId: ctx.tenant.id,
@@ -50,7 +53,10 @@ export async function loadQnaPair(
   slug: string,
   qnaId: string,
 ): Promise<QnaPair | null> {
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "VIEWER",
+    requiredPermission: "qna:view",
+  });
   return getQnaPair({ tenantId: ctx.tenant.id, qnaId });
 }
 
@@ -65,7 +71,10 @@ export async function createQnaPairAction(
   slug: string,
   input: unknown,
 ): Promise<{ id: string }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "qna:edit",
+  });
   const parsed: QnaPairInput = qnaPairInputSchema.parse(input);
   try {
     return await createQnaPair({ tenantId: ctx.tenant.id, input: parsed });
@@ -84,7 +93,10 @@ export async function updateQnaPairAction(
   qnaId: string,
   input: unknown,
 ): Promise<{ ok: true }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "qna:edit",
+  });
   const parsed: QnaPairInput = qnaPairInputSchema.parse(input);
   try {
     await updateQnaPair({ tenantId: ctx.tenant.id, qnaId, input: parsed });
@@ -103,7 +115,10 @@ export async function deleteQnaPairAction(
   slug: string,
   qnaId: string,
 ): Promise<{ ok: true }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "qna:edit",
+  });
   await deleteQnaPair({ tenantId: ctx.tenant.id, qnaId });
   return { ok: true };
 }
@@ -117,7 +132,10 @@ export async function bulkDeleteQnaPairsAction(
   slug: string,
   input: { qnaIds: string[] },
 ): Promise<{ count: number }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "qna:edit",
+  });
   return bulkDeleteQnaPairs({
     tenantId: ctx.tenant.id,
     qnaIds: input.qnaIds ?? [],

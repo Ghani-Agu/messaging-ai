@@ -1,6 +1,7 @@
 import "server-only";
 import type { Prisma, Role } from "@prisma/client";
 import type { AiBehavior } from "@/lib/validators";
+import type { PermissionSlug } from "@/lib/permissions";
 import { prisma } from "./client";
 
 /**
@@ -107,6 +108,8 @@ export async function setLastUsedTenant(args: {
 export type TenantMember = {
   id: string;
   role: Role;
+  /** Persisted permissions (stored value, not OWNER-resolved). */
+  permissions: string[];
   joinedAt: Date;
   user: {
     id: string;
@@ -129,6 +132,7 @@ export async function listTenantMembers(
     select: {
       id: true,
       role: true,
+      permissions: true,
       createdAt: true,
       user: {
         select: { id: true, name: true, email: true, image: true },
@@ -142,9 +146,84 @@ export async function listTenantMembers(
   return [...owners, ...rest].map((r) => ({
     id: r.id,
     role: r.role,
+    permissions: r.permissions,
     joinedAt: r.createdAt,
     user: r.user,
   }));
+}
+
+/**
+ * Count OWNER rows for a tenant. Used by changeMemberRole / removeMember
+ * to guard against orphaning a tenant (last-OWNER protection).
+ */
+export async function countOwners(tenantId: string): Promise<number> {
+  return prisma.tenantUser.count({
+    where: { tenantId, role: "OWNER" },
+  });
+}
+
+/**
+ * Add an existing User as a member of a tenant with the given role and
+ * permission list. Idempotent: if (tenantId, userId) already exists, the
+ * existing row is updated in place (role + permissions overwritten).
+ * Returns the resulting TenantUser id.
+ */
+export async function addOrUpdateMember(args: {
+  tenantId: string;
+  userId: string;
+  role: Role;
+  permissions: PermissionSlug[];
+}): Promise<{ id: string }> {
+  const row = await prisma.tenantUser.upsert({
+    where: {
+      tenantId_userId: { tenantId: args.tenantId, userId: args.userId },
+    },
+    create: {
+      tenantId: args.tenantId,
+      userId: args.userId,
+      role: args.role,
+      permissions: args.permissions as string[],
+    },
+    update: {
+      role: args.role,
+      permissions: args.permissions as string[],
+    },
+    select: { id: true },
+  });
+  return row;
+}
+
+/**
+ * Change a member's role and replace their permissions list. Caller is
+ * responsible for the last-OWNER and self-demotion guards — this helper
+ * just executes the write. Returns the affected row count (0 if the
+ * member isn't part of this tenant — caller can surface "not found").
+ */
+export async function changeMemberRole(args: {
+  tenantId: string;
+  userId: string;
+  role: Role;
+  permissions: PermissionSlug[];
+}): Promise<{ count: number }> {
+  const result = await prisma.tenantUser.updateMany({
+    where: { tenantId: args.tenantId, userId: args.userId },
+    data: { role: args.role, permissions: args.permissions as string[] },
+  });
+  return { count: result.count };
+}
+
+/**
+ * Remove a member from a tenant. Caller checks the last-OWNER + self-
+ * removal guards. Returns count (0 if the user wasn't a member).
+ */
+export async function removeMember(args: {
+  tenantId: string;
+  userId: string;
+}): Promise<{ count: number }> {
+  const result = await prisma.tenantUser.deleteMany({
+    where: { tenantId: args.tenantId, userId: args.userId },
+  });
+  return { count: result.count };
 }
 
 export async function updateTenantName(args: {

@@ -60,6 +60,7 @@ export default async function TenantLayout({
             image: ctx.user.image,
             isSuperAdmin: ctx.user.isSuperAdmin,
           }}
+          permissions={ctx.membership.permissions}
           hasBrandLogo={brand.hasLogo}
         />
         <main className="custom-scrollbar overflow-y-auto">

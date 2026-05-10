@@ -50,6 +50,7 @@ export async function enableWidgetChannel(
 
   const ctx = await requireTenantContext(parsed.data.tenantSlug, {
     minRole: "AGENT",
+    requiredPermission: "channels:edit",
   });
 
   // upsertWidgetChannel is the no-op path when a row already exists. It
@@ -123,6 +124,7 @@ export async function updateWidgetConfig(
 
   const ctx = await requireTenantContext(result.data.tenantSlug, {
     minRole: "AGENT",
+    requiredPermission: "channels:edit",
   });
 
   const existing = await getWidgetChannel(ctx.tenant.id);

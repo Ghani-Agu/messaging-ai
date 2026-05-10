@@ -27,7 +27,10 @@ import {
  */
 
 export async function listContacts(slug: string): Promise<ContactSummary[]> {
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "VIEWER",
+    requiredPermission: "contacts:view",
+  });
   return listContactsForTenant(ctx.tenant.id);
 }
 

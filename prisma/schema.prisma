@@ -136,6 +136,7 @@ model Tenant {
   messages         Message[]
   liveDataSources  LiveDataSource[]
   contacts         Contact[]
+  invitations      Invitation[]
 
   @@index([slug])
 }
@@ -165,6 +166,7 @@ model User {
   accounts              Account[]
   sessions              Session[]
   passwordResetTokens   PasswordResetToken[]
+  invitations           Invitation[]   @relation("UserInvitedInvitations")
   lastUsedTenant        Tenant?        @relation("UserLastTenant", fields: [lastUsedTenantId], references: [id], onDelete: SetNull)
   assignedConversations Conversation[] @relation("ConversationAssignedUser")
   sentMessages          Message[]      @relation("MessageSenderUser")
@@ -189,11 +191,17 @@ model PasswordResetToken {
 }
 
 model TenantUser {
-  id        String   @id @default(cuid())
-  tenantId  String
-  userId    String
-  role      Role     @default(OWNER)
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  tenantId    String
+  userId      String
+  role        Role     @default(OWNER)
+  // Page-permission slugs the member effectively has. Defaults to the
+  // role preset on insert; admins can customize per-member via the
+  // Settings → Members edit modal. OWNER's list is informational only —
+  // requireTenantContext short-circuits OWNER to always pass any
+  // requiredPermission check. See src/lib/permissions.ts.
+  permissions String[] @default([])
+  createdAt   DateTime @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -201,6 +209,40 @@ model TenantUser {
   @@unique([tenantId, userId])
   @@index([userId])
   @@index([tenantId])
+}
+
+// Time-bounded, single-use invitation to join a tenant. Created by an
+// ADMIN+ via the Members UI, consumed at /invitations/[token]. PENDING
+// is the only state that can be redeemed; expired tokens get folded
+// into EXPIRED lazily by the action that touches them, not by a worker.
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  CANCELLED
+  EXPIRED
+}
+
+model Invitation {
+  id          String           @id @default(cuid())
+  token       String           @unique
+  email       String
+  tenantId    String
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invitedBy   String
+  inviter     User             @relation("UserInvitedInvitations", fields: [invitedBy], references: [id])
+  role        Role
+  permissions String[]         @default([])
+  name        String?
+  status      InvitationStatus @default(PENDING)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  cancelledAt DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([tenantId, status])
+  @@index([email, tenantId])
+  @@index([expiresAt])
 }
 
 // =====================================================================

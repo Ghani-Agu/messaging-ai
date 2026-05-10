@@ -24,7 +24,10 @@ export async function loadGapsDigest(slug: string): Promise<{
   clusters: GapClusterSummary[];
   unclustered: UnclusteredGapSummary[];
 }> {
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "VIEWER",
+    requiredPermission: "knowledge-gaps:view",
+  });
   const [clusters, unclustered] = await Promise.all([
     loadGapClusters({ tenantId: ctx.tenant.id }),
     loadUnclusteredGaps({ tenantId: ctx.tenant.id }),
@@ -42,7 +45,10 @@ export async function markClusterResolvedAction(
   slug: string,
   input: { clusterKey: string },
 ): Promise<{ count: number }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "knowledge-gaps:edit",
+  });
   return markClusterResolved({
     tenantId: ctx.tenant.id,
     clusterKey: input.clusterKey,
@@ -57,7 +63,10 @@ export async function dismissGapAction(
   slug: string,
   input: { gapId: string },
 ): Promise<{ ok: true }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "knowledge-gaps:edit",
+  });
   await markSingleGapResolvedById({ tenantId: ctx.tenant.id, gapId: input.gapId });
   return { ok: true };
 }

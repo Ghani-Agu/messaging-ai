@@ -118,10 +118,13 @@ describe("contacts actions — role enforcement", () => {
     expect(requireTenantContextMock).toHaveBeenCalledWith(SLUG, { minRole: "OWNER" });
   });
 
-  it("listContacts is readable by VIEWER (read-only floor)", async () => {
+  it("listContacts is readable by VIEWER + contacts:view permission", async () => {
     listContactsMock.mockResolvedValue([]);
     await listContacts(SLUG);
-    expect(requireTenantContextMock).toHaveBeenCalledWith(SLUG, { minRole: "VIEWER" });
+    expect(requireTenantContextMock).toHaveBeenCalledWith(SLUG, {
+      minRole: "VIEWER",
+      requiredPermission: "contacts:view",
+    });
   });
 });
 

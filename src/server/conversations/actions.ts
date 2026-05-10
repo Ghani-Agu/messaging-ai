@@ -19,7 +19,10 @@ export async function listConversations(
   slug: string,
   filters: { channelType?: ChannelType } = {},
 ): Promise<ConversationListRow[]> {
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "VIEWER",
+    requiredPermission: "conversations:view",
+  });
   return listConversationsForTenant({
     tenantId: ctx.tenant.id,
     channelType: filters.channelType,
@@ -30,7 +33,10 @@ export async function getConversationDetail(
   slug: string,
   conversationId: string,
 ): Promise<ConversationWithMessages | null> {
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "VIEWER",
+    requiredPermission: "conversations:view",
+  });
   return getConversationWithMessages({
     tenantId: ctx.tenant.id,
     conversationId,

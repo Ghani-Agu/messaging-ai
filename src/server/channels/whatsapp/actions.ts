@@ -181,6 +181,7 @@ export async function updateWhatsAppConfig(
 
   const ctx = await requireTenantContext(result.data.tenantSlug, {
     minRole: "AGENT",
+    requiredPermission: "channels:edit",
   });
   const channel = await getWhatsAppChannel(ctx.tenant.id);
   if (!channel) {
@@ -289,6 +290,7 @@ export async function testWhatsAppConnection(
 
   const ctx = await requireTenantContext(parsed.data.tenantSlug, {
     minRole: "AGENT",
+    requiredPermission: "channels:edit",
   });
   const channel = await getWhatsAppChannel(ctx.tenant.id);
   if (!channel) {

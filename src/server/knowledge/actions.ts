@@ -51,7 +51,10 @@ export async function createWebsiteSource(
   slug: string,
   input: { url: string },
 ): Promise<{ sourceId: string }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "documents:edit",
+  });
   const url = websiteUrlSchema.parse(input.url);
   const hostname = new URL(url).hostname;
 
@@ -108,7 +111,10 @@ export async function createFileSource(
   slug: string,
   input: { filename: string; mime: string; size: number },
 ): Promise<{ sourceId: string; signedUrl: string; storagePath: string }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "documents:edit",
+  });
   const { filename, mime, size } = fileMetadataSchema.parse(input);
 
   // Pre-generate the source ID so we can derive the storage path before
@@ -146,7 +152,10 @@ export async function finalizeFileUpload(
   slug: string,
   input: { sourceId: string },
 ): Promise<void> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "documents:edit",
+  });
   const source = await getSource({
     tenantId: ctx.tenant.id,
     sourceId: input.sourceId,
@@ -198,7 +207,10 @@ export async function createManualSource(
   slug: string,
   input: { name: string; content: string },
 ): Promise<{ sourceId: string }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "documents:edit",
+  });
   const { name, content } = manualEntrySchema.parse(input);
 
   const { id: sourceId } = await createSource({
@@ -276,7 +288,10 @@ export async function reingestSource(
   slug: string,
   input: { sourceId: string },
 ): Promise<void> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "documents:edit",
+  });
   const source = await getSource({
     tenantId: ctx.tenant.id,
     sourceId: input.sourceId,
@@ -333,7 +348,10 @@ export async function reingestSource(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function listSources(slug: string): Promise<SourceSummary[]> {
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "VIEWER",
+    requiredPermission: "documents:view",
+  });
   return listSourcesForTenant(ctx.tenant.id);
 }
 
@@ -350,7 +368,10 @@ export async function runRetrieval(
   slug: string,
   input: { query: string; topK: number },
 ): Promise<RetrievedChunk[]> {
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "VIEWER",
+    requiredPermission: "documents:view",
+  });
   const { query, topK } = retrievalQuerySchema.parse(input);
   return retrieve({ tenantId: ctx.tenant.id, query, topK });
 }
@@ -363,7 +384,10 @@ export async function markSourceVerifiedAction(
   slug: string,
   input: { sourceId: string },
 ): Promise<{ ok: true }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "documents:edit",
+  });
   await markSourceVerified({ tenantId: ctx.tenant.id, sourceId: input.sourceId });
   return { ok: true };
 }
@@ -372,7 +396,10 @@ export async function deleteSource(
   slug: string,
   input: { sourceId: string },
 ): Promise<void> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "documents:edit",
+  });
   const source = await getSource({
     tenantId: ctx.tenant.id,
     sourceId: input.sourceId,

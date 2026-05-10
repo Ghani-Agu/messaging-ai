@@ -28,6 +28,8 @@ type SidebarProps = {
     image: string | null;
     isSuperAdmin: boolean;
   };
+  /** Permission slugs the current member effectively has. Filters nav. */
+  permissions: readonly string[];
   /**
    * Live counts for badge-bearing nav items. Phase B passes zeros (the
    * placeholder visual lights up); phase D wires real numbers from the
@@ -54,6 +56,7 @@ export function Sidebar({
   tenant,
   memberships,
   user,
+  permissions,
   counts,
   hasBrandLogo = false,
 }: SidebarProps) {
@@ -123,6 +126,7 @@ export function Sidebar({
           tenantSlug={tenant.slug}
           collapsed={collapsed}
           counts={counts}
+          permissions={permissions}
         />
       </div>
 

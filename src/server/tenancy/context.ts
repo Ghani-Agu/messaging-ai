@@ -5,6 +5,10 @@ import { notFound, redirect } from "next/navigation";
 import type { Plan, Prisma, Role } from "@prisma/client";
 import { auth } from "@/server/auth";
 import { prisma } from "@/server/db/client";
+import {
+  getEffectivePermissions,
+  type PermissionSlug,
+} from "@/lib/permissions";
 
 /**
  * Per-request tenant context. Every authenticated, tenant-scoped page and
@@ -30,8 +34,27 @@ export type TenantContext = {
   };
   membership: {
     role: Role;
+    /**
+     * Permission slugs the member effectively has. For OWNER this is the
+     * full PERMISSION_SLUGS list regardless of what's persisted; for
+     * non-OWNER it's the stored TenantUser.permissions filtered to known
+     * slugs. Always non-null; defaults to [] for legacy rows that
+     * predate the migration backfill.
+     */
+    permissions: PermissionSlug[];
   };
 };
+
+export class PermissionDeniedError extends Error {
+  readonly required: PermissionSlug;
+  readonly role: Role;
+  constructor(required: PermissionSlug, role: Role) {
+    super(`Permission denied: requires ${required}; role=${role}`);
+    this.name = "PermissionDeniedError";
+    this.required = required;
+    this.role = role;
+  }
+}
 
 /**
  * Single source of truth for role precedence. Higher rank ⇒ broader
@@ -81,6 +104,7 @@ const resolveContext = cache(async (slug: string): Promise<TenantContext> => {
     },
     select: {
       role: true,
+      permissions: true,
       tenant: {
         select: {
           id: true,
@@ -110,7 +134,13 @@ const resolveContext = cache(async (slug: string): Promise<TenantContext> => {
   return {
     user: row.user,
     tenant: row.tenant,
-    membership: { role: row.role },
+    membership: {
+      role: row.role,
+      permissions: getEffectivePermissions({
+        role: row.role,
+        permissions: row.permissions,
+      }),
+    },
   };
 });
 
@@ -128,13 +158,25 @@ export async function getTenantContext(slug: string): Promise<TenantContext> {
 }
 
 /**
- * Same as getTenantContext, plus an optional role floor. Use this in mutating
- * server actions and on routes that require elevated roles (e.g. /billing
- * needing OWNER). Throws `ForbiddenError` when the role is too low.
+ * Same as getTenantContext, plus optional role floor + permission check.
+ * Use in mutating Server Actions or on routes requiring elevated roles /
+ * specific page permissions.
+ *
+ * Order of checks:
+ *   1. resolveContext (auth + membership)
+ *   2. minRole — throws ForbiddenError when the role rank falls short.
+ *   3. requiredPermission — OWNER always passes; otherwise the user's
+ *      effective permission list must contain the slug. Throws
+ *      PermissionDeniedError when missing.
+ *
+ * Both checks are independent: a route can require ADMIN-floor AND a
+ * specific edit permission. OWNER bypasses requiredPermission as a
+ * defense-in-depth measure (a deleted-from-list slug never locks the
+ * OWNER out of their own tenant).
  */
 export async function requireTenantContext(
   slug: string,
-  options: { minRole?: Role } = {},
+  options: { minRole?: Role; requiredPermission?: PermissionSlug } = {},
 ): Promise<TenantContext> {
   const ctx = await resolveContext(slug);
   if (options.minRole) {
@@ -142,6 +184,17 @@ export async function requireTenantContext(
     const actual = ROLE_RANK[ctx.membership.role];
     if (actual < required) {
       throw new ForbiddenError(options.minRole, ctx.membership.role);
+    }
+  }
+  if (options.requiredPermission) {
+    if (
+      ctx.membership.role !== "OWNER" &&
+      !ctx.membership.permissions.includes(options.requiredPermission)
+    ) {
+      throw new PermissionDeniedError(
+        options.requiredPermission,
+        ctx.membership.role,
+      );
     }
   }
   return ctx;

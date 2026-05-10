@@ -342,6 +342,7 @@ export async function updateMessengerConfig(
   }
   const ctx = await requireTenantContext(result.data.tenantSlug, {
     minRole: "AGENT",
+    requiredPermission: "channels:edit",
   });
   const channel = await getMessengerChannel(ctx.tenant.id);
   if (!channel) {
@@ -382,6 +383,7 @@ export async function updateInstagramConfig(
   }
   const ctx = await requireTenantContext(result.data.tenantSlug, {
     minRole: "AGENT",
+    requiredPermission: "channels:edit",
   });
   const channel = await getInstagramChannel(ctx.tenant.id);
   if (!channel) {
@@ -424,6 +426,7 @@ export async function testConnection(
 
   const ctx = await requireTenantContext(parsed.data.tenantSlug, {
     minRole: "AGENT",
+    requiredPermission: "channels:edit",
   });
   const channel =
     parsed.data.platform === "messenger"

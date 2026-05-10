@@ -22,7 +22,10 @@ import {
 
 export async function loadOperationalFacts(slug: string): Promise<OperationalFactsData> {
   // VIEWER-floor for read so non-editing agents can see what's configured.
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "VIEWER",
+    requiredPermission: "business-info:view",
+  });
   return getOperationalFacts({ tenantId: ctx.tenant.id });
 }
 
@@ -30,7 +33,10 @@ export async function saveOperationalFacts(
   slug: string,
   input: unknown,
 ): Promise<{ ok: true }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "business-info:edit",
+  });
   // Re-parse on the server. The client form has its own Zod parse before
   // submit — this is the trust-boundary check, never a duplicate.
   const data = operationalFactsDataSchema.parse(input);

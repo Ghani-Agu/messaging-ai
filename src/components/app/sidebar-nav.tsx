@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { TooltipHint } from "@/components/ui/tooltip";
+import type { PermissionSlug } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 
 /** Keys keep the count source in sync with the SidebarNavCounts shape. */
@@ -32,6 +33,8 @@ type NavItem = {
   phase?: number;
   /** When set, render a count badge sourced from props.counts[countKey]. */
   countKey?: CountKey;
+  /** Page-view permission the user must have for this nav entry to render. */
+  permission: PermissionSlug;
 };
 
 // Order: most-used → least-used. Phase 8 added "Business Info" (Operational
@@ -40,18 +43,18 @@ type NavItem = {
 // under "Knowledge"). Placed alongside Knowledge so the two
 // knowledge-shaped surfaces sit together.
 const ITEMS: NavItem[] = [
-  { href: (s) => `/${s}/dashboard`, label: "Dashboard", icon: LayoutDashboard },
-  { href: (s) => `/${s}/conversations`, label: "Conversations", icon: MessageSquare, phase: 5, countKey: "conversations" },
-  { href: (s) => `/${s}/knowledge`, label: "Documents", icon: BookOpen, phase: 3 },
-  { href: (s) => `/${s}/knowledge/items`, label: "Products", icon: Package, phase: 8 },
-  { href: (s) => `/${s}/knowledge/qna`, label: "Q&A", icon: MessageSquareText, phase: 8 },
-  { href: (s) => `/${s}/knowledge/business-info`, label: "Business Info", icon: Building2, phase: 8 },
-  { href: (s) => `/${s}/knowledge/live-data`, label: "Live Data Sources", icon: Database, phase: 8 },
-  { href: (s) => `/${s}/knowledge/gaps`, label: "Knowledge Gaps", icon: HelpCircle, phase: 8, countKey: "gaps" },
-  { href: (s) => `/${s}/channels`, label: "Channels", icon: Plug, phase: 5 },
-  { href: (s) => `/${s}/playground`, label: "Playground", icon: Sparkles, phase: 4 },
-  { href: (s) => `/${s}/settings`, label: "Settings", icon: Settings },
-  { href: (s) => `/${s}/contacts`, label: "Contacts", icon: ContactRound },
+  { href: (s) => `/${s}/dashboard`, label: "Dashboard", icon: LayoutDashboard, permission: "dashboard:view" },
+  { href: (s) => `/${s}/conversations`, label: "Conversations", icon: MessageSquare, phase: 5, countKey: "conversations", permission: "conversations:view" },
+  { href: (s) => `/${s}/knowledge`, label: "Documents", icon: BookOpen, phase: 3, permission: "documents:view" },
+  { href: (s) => `/${s}/knowledge/items`, label: "Products", icon: Package, phase: 8, permission: "products:view" },
+  { href: (s) => `/${s}/knowledge/qna`, label: "Q&A", icon: MessageSquareText, phase: 8, permission: "qna:view" },
+  { href: (s) => `/${s}/knowledge/business-info`, label: "Business Info", icon: Building2, phase: 8, permission: "business-info:view" },
+  { href: (s) => `/${s}/knowledge/live-data`, label: "Live Data Sources", icon: Database, phase: 8, permission: "live-data:view" },
+  { href: (s) => `/${s}/knowledge/gaps`, label: "Knowledge Gaps", icon: HelpCircle, phase: 8, countKey: "gaps", permission: "knowledge-gaps:view" },
+  { href: (s) => `/${s}/channels`, label: "Channels", icon: Plug, phase: 5, permission: "channels:view" },
+  { href: (s) => `/${s}/playground`, label: "Playground", icon: Sparkles, phase: 4, permission: "playground:view" },
+  { href: (s) => `/${s}/settings`, label: "Settings", icon: Settings, permission: "settings:view" },
+  { href: (s) => `/${s}/contacts`, label: "Contacts", icon: ContactRound, permission: "contacts:view" },
 ];
 
 export type SidebarNavCounts = Partial<Record<CountKey, number>>;
@@ -60,13 +63,22 @@ export function SidebarNav({
   tenantSlug,
   collapsed = false,
   counts,
+  permissions,
 }: {
   tenantSlug: string;
   collapsed?: boolean;
   counts?: SidebarNavCounts;
+  /**
+   * The current member's effective permission list. Items whose
+   * `permission` slug isn't in this list get filtered out — VIEWER and
+   * AGENT roles see a trimmed nav matching their access.
+   */
+  permissions: readonly string[];
 }) {
   const pathname = usePathname();
-  const resolved = ITEMS.map((item) => ({ item, href: item.href(tenantSlug) }));
+  const permissionSet = new Set(permissions);
+  const filtered = ITEMS.filter((item) => permissionSet.has(item.permission));
+  const resolved = filtered.map((item) => ({ item, href: item.href(tenantSlug) }));
 
   return (
     <nav

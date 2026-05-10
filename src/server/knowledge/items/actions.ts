@@ -34,7 +34,10 @@ export async function loadItem(
   slug: string,
   itemId: string,
 ): Promise<KnowledgeItem | null> {
-  const ctx = await requireTenantContext(slug, { minRole: "VIEWER" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "VIEWER",
+    requiredPermission: "products:view",
+  });
   return getItem({ tenantId: ctx.tenant.id, itemId });
 }
 
@@ -42,7 +45,10 @@ export async function createItemAction(
   slug: string,
   input: unknown,
 ): Promise<{ id: string }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "products:edit",
+  });
   // Re-parse on the server. Client form validates first; this is the
   // trust-boundary check.
   const parsed: KnowledgeItemInput = knowledgeItemInputSchema.parse(input);
@@ -54,7 +60,10 @@ export async function updateItemAction(
   itemId: string,
   input: unknown,
 ): Promise<{ ok: true }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "products:edit",
+  });
   const parsed: KnowledgeItemInput = knowledgeItemInputSchema.parse(input);
   await updateItem({ tenantId: ctx.tenant.id, itemId, input: parsed });
   return { ok: true };
@@ -64,7 +73,10 @@ export async function deleteItemAction(
   slug: string,
   itemId: string,
 ): Promise<{ ok: true }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "products:edit",
+  });
   await deleteItem({ tenantId: ctx.tenant.id, itemId });
   return { ok: true };
 }
@@ -73,7 +85,10 @@ export async function markItemVerifiedAction(
   slug: string,
   itemId: string,
 ): Promise<{ ok: true }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "products:edit",
+  });
   await markItemVerified({ tenantId: ctx.tenant.id, itemId });
   return { ok: true };
 }
@@ -86,7 +101,10 @@ export async function markItemVerifiedAction(
 export async function markAllItemsVerifiedAction(
   slug: string,
 ): Promise<{ count: number }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "products:edit",
+  });
   return markAllItemsVerifiedForTenant({ tenantId: ctx.tenant.id });
 }
 
@@ -107,7 +125,10 @@ export async function smartImportItemsAction(
   slug: string,
   input: { text: string },
 ): Promise<{ items: StructuredItemDraft[]; notes?: string }> {
-  await requireTenantContext(slug, { minRole: "AGENT" });
+  await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "products:edit",
+  });
   if (!input.text || !input.text.trim()) {
     throw new Error("Paste some catalog text first");
   }
@@ -128,7 +149,10 @@ export async function previewCsvImportAction(
   slug: string,
   input: { csv: string },
 ): Promise<CsvImportResult> {
-  await requireTenantContext(slug, { minRole: "AGENT" });
+  await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "products:edit",
+  });
   return importCsvForItems(input.csv ?? "");
 }
 
@@ -145,7 +169,10 @@ export async function commitImportedItemsAction(
   created: { id: string; row: number }[];
   failed: { row: number; error: string }[];
 }> {
-  const ctx = await requireTenantContext(slug, { minRole: "AGENT" });
+  const ctx = await requireTenantContext(slug, {
+    minRole: "AGENT",
+    requiredPermission: "products:edit",
+  });
   const created: { id: string; row: number }[] = [];
   const failed: { row: number; error: string }[] = [];
   for (let i = 0; i < (input.items ?? []).length; i++) {
