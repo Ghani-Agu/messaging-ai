@@ -251,6 +251,12 @@ export async function POST(req: Request): Promise<Response> {
                   sourceName: `Operational fact: ${c.field}`,
                   sourceUrl: undefined as string | undefined,
                 };
+              case "contact":
+                return {
+                  ...base,
+                  sourceName: `Contact: ${c.name}`,
+                  sourceUrl: undefined as string | undefined,
+                };
             }
           }),
           computedConfidence: lastResult.confidence,

@@ -2,37 +2,30 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { BookOpen, ExternalLink, Package, MessageSquareText, Building2 } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { durationFast, easeOutExpo } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import {
+  iconForKind,
+  labelForKind,
+  type CitationKind,
+} from "./playground-citation-kinds";
 
 /**
  * Wire shape produced by /api/playground/messages and the widget route.
- * Identical to the BrainCitation discriminated union but flattened for
- * transport: every citation has an index, kind, sourceName, optional
- * sourceUrl, and a preview snippet.
+ * Mirrors the BrainCitation discriminated union, flattened for transport:
+ * every citation has an index, kind, sourceName, optional sourceUrl, and
+ * a preview snippet. `kind` is widened to `string` so a new server-side
+ * citation kind doesn't crash the client — see playground-citation-kinds
+ * for the fallback icon/label.
  */
 export type PlaygroundCitation = {
   index: number;
-  kind: "chunk" | "item" | "qna" | "operational_fact";
+  kind: CitationKind | (string & {});
   sourceName: string;
   sourceUrl?: string;
   preview: string;
 };
-
-const KIND_ICON = {
-  chunk: BookOpen,
-  item: Package,
-  qna: MessageSquareText,
-  operational_fact: Building2,
-} as const;
-
-const KIND_LABEL = {
-  chunk: "Source",
-  item: "Product",
-  qna: "Q&A",
-  operational_fact: "Fact",
-} as const;
 
 /**
  * Citations strip rendered below an AI message. Each citation is a
@@ -63,7 +56,7 @@ export function PlaygroundCitations({
     <div className="mt-3 space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
         {citations.map((c) => {
-          const Icon = KIND_ICON[c.kind];
+          const Icon = iconForKind(c.kind);
           const isOpen = expanded.has(c.index);
           return (
             <button
@@ -71,7 +64,7 @@ export function PlaygroundCitations({
               type="button"
               onClick={() => toggle(c.index)}
               aria-expanded={isOpen}
-              aria-label={`${KIND_LABEL[c.kind]}: ${c.sourceName}`}
+              aria-label={`${labelForKind(c.kind)}: ${c.sourceName}`}
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium",
                 "transition-colors duration-150 ease-out",
@@ -108,7 +101,7 @@ export function PlaygroundCitations({
               <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3">
                 <div className="mb-1.5 flex items-center justify-between gap-2">
                   <span className="text-caption font-medium text-[var(--text-tertiary)]">
-                    [{c.index}] {KIND_LABEL[c.kind]} — {c.sourceName}
+                    [{c.index}] {labelForKind(c.kind)} — {c.sourceName}
                   </span>
                   {c.sourceUrl ? (
                     <a
