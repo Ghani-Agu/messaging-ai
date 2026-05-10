@@ -8,6 +8,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "@/server/db/client";
 import { embedKnowledgeItem } from "@/server/knowledge/embed-item";
+import { inferBrandFromName } from "@/lib/items";
 import { decryptConfig } from "../crypto";
 import { OdooClient } from "./client";
 import { OdooConfigSchema, type OdooConfig } from "./config-schema";
@@ -48,6 +49,7 @@ const PRODUCT_FIELDS_BASE = [
   "qty_available",
   "virtual_available",
   "categ_id",
+  "currency_id",
   "type",
   "sale_ok",
   "active",
@@ -239,9 +241,16 @@ async function upsertItem(
     product.description_sale === false ? null : product.description_sale;
   const category = product.categ_id ? product.categ_id[1] : null;
 
-  // Brand is a many2one custom field name from config.additionalFields.
-  // Odoo returns it as `[id, "Display Name"]` or false; we extract the
-  // display name and use it as the brand label.
+  // Brand resolution, two stages:
+  //  1. Configured Odoo many2one custom field (e.g. Tayssir's `marque_id`).
+  //     Returns `[id, "Display Name"]` when set, `false` when unset.
+  //  2. Fallback: infer from name's first token against the curated
+  //     KNOWN_BRANDS_AT_NAME_START list (src/lib/items.ts). Conservative —
+  //     returns null if the first token isn't on the list. The fallback
+  //     exists for tenants whose Odoo brand field name is unknown OR for
+  //     individual records where the brand many2one is unset. Strengthens
+  //     retrieval for brand-style customer queries ("3andkom Ajax?")
+  //     without requiring an operator-side schema discovery pass.
   let brand: string | null = null;
   if (config.additionalFields?.brandField) {
     const brandRaw = raw[config.additionalFields.brandField];
@@ -252,6 +261,24 @@ async function upsertItem(
     ) {
       brand = brandRaw[1];
     }
+  }
+  if (!brand) {
+    brand = inferBrandFromName(product.name);
+  }
+
+  // Currency many2one from Odoo's product.template.currency_id. Mapped to
+  // KnowledgeItem.currency so Block C citations render with the unit
+  // ("Price: DZD 230000.00") instead of unit-less ("Price: 230000.00"),
+  // which left the model with weaker pricing signal on synced catalogs.
+  // Stays null when currency_id is false / missing — we don't guess.
+  let currency: string | null = null;
+  const currencyRaw = raw["currency_id"];
+  if (
+    Array.isArray(currencyRaw) &&
+    currencyRaw.length === 2 &&
+    typeof currencyRaw[1] === "string"
+  ) {
+    currency = currencyRaw[1];
   }
 
   // Odoo write_date is "YYYY-MM-DD HH:MM:SS" in server time (UTC for
@@ -265,6 +292,7 @@ async function upsertItem(
     externalId,
     name: product.name,
     sku,
+    currency,
     priceCents: Math.round(product.list_price * 100),
     availability: mapAvailability(product.qty_available),
     quantityOnHand: product.qty_available,
@@ -291,6 +319,7 @@ async function upsertItem(
     update: {
       name: data.name,
       sku: data.sku,
+      currency: data.currency,
       priceCents: data.priceCents,
       availability: data.availability,
       quantityOnHand: data.quantityOnHand,

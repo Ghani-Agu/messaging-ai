@@ -68,6 +68,70 @@ export const knowledgeItemInputSchema = z.object({
 export type KnowledgeItemInput = z.infer<typeof knowledgeItemInputSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Brand inference (conservative, hardcoded list)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Known security / network / display brands that frequently appear at the
+ * start of a product name in the WBP catalog (and similar verticals).
+ * Used by sync.ts when the Odoo brand custom-field is missing or unset,
+ * and as a fallback in buildItemEmbedText when item.brand is null.
+ *
+ * Hardcoded by design (v1). When a second customer in a different vertical
+ * (ecommerce, food, fashion) onboards, the right move is per-tenant brand
+ * lists or a smarter signal — not extending this list with non-domain
+ * entries. Keep this list curated to brand names you'd ALWAYS want to
+ * infer; "Camera", "Modem", and other product nouns must NOT live here.
+ *
+ * Match is case-insensitive on the first whitespace-delimited token of
+ * the item name. Output is normalized to a canonical capitalization
+ * (first letter upper, rest lower) so downstream rendering + grouping
+ * stays consistent regardless of how the operator wrote the product name.
+ */
+export const KNOWN_BRANDS_AT_NAME_START = [
+  "AJAX",
+  "DAHUA",
+  "IMOU",
+  "HIKVISION",
+  "UBIQUITI",
+  "MAXHUB",
+  "TPLINK",
+  "TP-LINK",
+  "MIKROTIK",
+  "CAMBIUM",
+  "RUIJIE",
+] as const;
+
+/**
+ * Infer a brand name from the first token of a product name, matching
+ * against KNOWN_BRANDS_AT_NAME_START (case-insensitive). Returns null when
+ * the first token isn't on the list — never guess. The canonical-cap output
+ * ("AJAX" → "Ajax", "TP-LINK" → "Tp-link") gives downstream code a single
+ * stable string per brand even when source catalogs vary in capitalization.
+ *
+ * Pure function — safe to call from sync workers, embed helpers, and
+ * client UI alike.
+ */
+export function inferBrandFromName(name: string | null | undefined): string | null {
+  if (!name) return null;
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return null;
+  const firstToken = trimmed.split(/\s+/)[0];
+  if (!firstToken) return null;
+  const upperToken = firstToken.toUpperCase();
+  for (const known of KNOWN_BRANDS_AT_NAME_START) {
+    if (upperToken === known) {
+      // Canonical form: first letter upper, rest lower. Handles hyphenated
+      // multi-segment names (TP-LINK → Tp-link) the same way — operators
+      // who really care about display capitalization can override via the
+      // explicit brand field.
+      return known.charAt(0) + known.slice(1).toLowerCase();
+    }
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Embedding text (pure helper — used by the embed worker)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -105,18 +169,22 @@ export type ItemEmbedSource = {
  * retrieval. Specs intentionally use bare `key: value` because keys are
  * heterogeneous and any fixed prefix would mislabel half the time.
  *
- * Brand inference (from name's first token, etc.) was considered and
- * dropped for v1 — too many false positives on patterns like "XVR Dahua…"
- * (XVR is a product line, Dahua is the brand). Synced items with brand=null
- * still get the category boost, and the embedding model already learns the
- * brand from the start of `name` for most synced products.
+ * Brand fallback: when item.brand is null/empty, infer from the first
+ * name token via inferBrandFromName (KNOWN_BRANDS_AT_NAME_START list).
+ * Manual items + correctly-synced items already have brand set and pass
+ * the explicit-brand branch; the fallback exists primarily for synced
+ * rows from sources where the brand custom-field name is unknown (WBP's
+ * Odoo case). The original v1 decision to skip brand inference (item.ts
+ * comment removed in this commit) was overcautious — the curated list
+ * keeps false positives near zero for the platform's current domain.
  *
  * Pure function — exposed for the embed worker (queue/workers/embed.ts),
  * the inline embed helper (server/knowledge/embed-item.ts), and unit tests.
  */
 export function buildItemEmbedText(item: ItemEmbedSource): string {
   const parts: string[] = [item.name.trim()];
-  if (item.brand) parts.push(`Marque: ${item.brand.trim()}`);
+  const brand = item.brand?.trim() ? item.brand.trim() : inferBrandFromName(item.name);
+  if (brand) parts.push(`Marque: ${brand}`);
   if (item.category) parts.push(`Catégorie: ${item.category.trim()}`);
   if (item.sku) parts.push(`SKU: ${item.sku.trim()}`);
   if (item.description) parts.push(item.description.trim());

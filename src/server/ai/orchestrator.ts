@@ -88,10 +88,18 @@ const MAX_INPUT_TOKEN_HEADROOM = 8000;
 
 // Per-channel retrieval top-K. Chunks scale down to 5 when items are
 // present (per Gate-1 P8c risk discussion) so the combined Block C stays
-// under the 5500-token A+B+C target asserted in prompts/system.test.ts.
+// within the A+B+C target asserted in prompts/system.test.ts.
+//
+// TOP_K_ITEMS bumped 5 → 8: WBP's catalog of 1740+ synced items has
+// sparse embed text per row (name + brand + category only when those
+// fields are populated upstream), so the right item often ranks 6-8
+// on brand-style queries ("3andkom Ajax?", "Dahua disponibles?"). A
+// K of 5 was too narrow; 8 trades ~250 tokens of Block C headroom
+// for materially better hit rate on the production catalog. Hard
+// runtime input budget (MAX_INPUT_TOKEN_HEADROOM=8000) stays clear.
 const TOP_K_CHUNKS_NO_ITEMS = 8;
 const TOP_K_CHUNKS_WITH_ITEMS = 5;
-const TOP_K_ITEMS = 5;
+const TOP_K_ITEMS = 8;
 const TOP_K_QNA = 1; // top-1 above threshold; multi-Q&A blending is post-v1
 const HISTORY_TURNS_DEFAULT = 8;
 

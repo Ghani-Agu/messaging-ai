@@ -93,6 +93,11 @@ function buildOdooProduct(overrides: Record<string, unknown> = {}) {
     qty_available: 5,
     virtual_available: 5,
     categ_id: [3, "Electronics"],
+    // Odoo many2one shape: [id, "Display Name"]. Default to DZD since that's
+    // the production WBP currency; tests overriding to `false` exercise the
+    // unset path. The wire-shape sync.ts cares about is currency_id; the
+    // typed schema (models.ts) also surfaces it as optional.
+    currency_id: [123, "DZD"],
     type: "product",
     sale_ok: true,
     active: true,
@@ -288,15 +293,120 @@ describe("syncOdooProducts", () => {
     expect(args.create.brand).toBe("Special Brand");
   });
 
-  it("brand is null when the custom field is `false` (unset)", async () => {
+  it("brand is null when the custom field is `false` AND the name doesn't start with a known brand", async () => {
     searchReadMock.mockResolvedValueOnce([
-      buildOdooProduct({ marque_id: false }),
+      buildOdooProduct({ marque_id: false, name: "Onduleur 1500VA" }),
     ]);
     await syncOdooProducts(buildSource());
     const args = upsertMock.mock.calls[0]?.[0] as {
       create: { brand: string | null };
     };
     expect(args.create.brand).toBeNull();
+  });
+
+  it("falls back to inferred brand when the custom field is `false` AND name starts with a known brand", async () => {
+    searchReadMock.mockResolvedValueOnce([
+      buildOdooProduct({ marque_id: false, name: "AJAX Hub Plus" }),
+    ]);
+    await syncOdooProducts(buildSource());
+    const args = upsertMock.mock.calls[0]?.[0] as {
+      create: { brand: string | null };
+    };
+    expect(args.create.brand).toBe("Ajax");
+  });
+
+  it("falls back to inferred brand when the source has NO brandField configured at all", async () => {
+    // WBP case: Tayssir's brand field name is unknown, so additionalFields
+    // is omitted entirely. Inference still kicks in for branded names.
+    const noBrandFieldConfig = JSON.stringify({
+      url: "https://example.test",
+      database: "demo",
+      username: "user@example.test",
+      password: "pw-do-not-leak-12345",
+    });
+    const source: LiveDataSource = {
+      ...buildSource(),
+      encryptedConfig: encryptConfig(noBrandFieldConfig),
+    };
+    searchReadMock.mockResolvedValueOnce([
+      buildOdooProduct({ name: "Dahua HDCVI 2MP Dome" }),
+    ]);
+    await syncOdooProducts(source);
+    const args = upsertMock.mock.calls[0]?.[0] as {
+      create: { brand: string | null };
+    };
+    expect(args.create.brand).toBe("Dahua");
+  });
+
+  it("explicit brandField value wins over name inference", async () => {
+    // Even if name starts with "AJAX", an explicit marque_id "Other" overrides.
+    searchReadMock.mockResolvedValueOnce([
+      buildOdooProduct({
+        marque_id: [99, "Other Brand"],
+        name: "AJAX Hub Plus",
+      }),
+    ]);
+    await syncOdooProducts(buildSource());
+    const args = upsertMock.mock.calls[0]?.[0] as {
+      create: { brand: string | null };
+    };
+    expect(args.create.brand).toBe("Other Brand");
+  });
+
+  it("extracts currency display-name from currency_id many2one", async () => {
+    searchReadMock.mockResolvedValueOnce([
+      buildOdooProduct({ currency_id: [123, "DZD"] }),
+    ]);
+    await syncOdooProducts(buildSource());
+    const args = upsertMock.mock.calls[0]?.[0] as {
+      create: { currency: string | null };
+    };
+    expect(args.create.currency).toBe("DZD");
+  });
+
+  it("maps non-DZD currency display-names through as-is (EUR, USD)", async () => {
+    searchReadMock.mockResolvedValueOnce([
+      buildOdooProduct({ currency_id: [2, "EUR"], id: 200 }),
+      buildOdooProduct({ currency_id: [1, "USD"], id: 201 }),
+    ]);
+    await syncOdooProducts(buildSource());
+    expect(
+      (upsertMock.mock.calls[0]?.[0] as { create: { currency: string | null } })
+        .create.currency,
+    ).toBe("EUR");
+    expect(
+      (upsertMock.mock.calls[1]?.[0] as { create: { currency: string | null } })
+        .create.currency,
+    ).toBe("USD");
+  });
+
+  it("currency is null when currency_id is `false` (unset)", async () => {
+    searchReadMock.mockResolvedValueOnce([
+      buildOdooProduct({ currency_id: false }),
+    ]);
+    await syncOdooProducts(buildSource());
+    const args = upsertMock.mock.calls[0]?.[0] as {
+      create: { currency: string | null };
+    };
+    expect(args.create.currency).toBeNull();
+  });
+
+  it("currency is null when currency_id is missing entirely from the payload", async () => {
+    const productNoCurrency = buildOdooProduct();
+    delete (productNoCurrency as Record<string, unknown>).currency_id;
+    searchReadMock.mockResolvedValueOnce([productNoCurrency]);
+    await syncOdooProducts(buildSource());
+    const args = upsertMock.mock.calls[0]?.[0] as {
+      create: { currency: string | null };
+    };
+    expect(args.create.currency).toBeNull();
+  });
+
+  it("requests currency_id in the field list", async () => {
+    searchReadMock.mockResolvedValueOnce([]);
+    await syncOdooProducts(buildSource());
+    const fields = searchReadMock.mock.calls[0]?.[2];
+    expect(fields).toContain("currency_id");
   });
 
   it("on success: clears lastSyncStartedAt, sets lastSyncedAt, status=CONNECTED, increments syncedRecordCount", async () => {

@@ -46,6 +46,19 @@ export const OdooProductTemplateSchema = z
       .union([z.string(), z.literal(false)])
       .nullable()
       .optional(),
+    // many2one to res.currency. Returns [id, "DZD"] / [id, "EUR"] when set,
+    // and `false` (the boolean literal — Odoo XML-RPC convention) when
+    // unset. The sync adapter maps the display-name half into
+    // KnowledgeItem.currency so Block C citations can render priced items
+    // with their unit ("Price: DZD 230000.00" vs the unit-less "Price:
+    // 230000.00", which was leaving the model with weaker pricing signal).
+    // Must accept `false` here or the row fails parse and gets skipped
+    // (categ_id has the same issue for category-less products, but is
+    // already required upstream).
+    currency_id: z
+      .union([z.tuple([z.number(), z.string()]), z.literal(false)])
+      .nullable()
+      .optional(),
   })
   .passthrough();
 

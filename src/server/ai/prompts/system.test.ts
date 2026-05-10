@@ -333,17 +333,21 @@ describe("buildBlockA / buildBlockB / buildBlockC", () => {
 
 describe("Block A+B+C token budget (Phase 8c)", () => {
   // Per Gate-1 P8c risk discussion: assert that a representative envelope
-  // (full tier-1 facts, top-5 items, top-5 chunks, 1 Q&A, tier-2 hours +
-  // locations) fits ≤ 5500 tokens. That leaves 2500 tokens of the 8000-
+  // (full tier-1 facts, top-8 items, top-5 chunks, 1 Q&A, tier-2 hours +
+  // locations) fits ≤ 5800 tokens. That leaves ~2200 tokens of the 8000-
   // token input headroom for history + new message + output buffer.
   //
+  // P4r-8: bumped 5500 → 5800 to absorb TOP_K_ITEMS 5 → 8 (orchestrator.ts).
+  // Each extra item adds ~50-60 tokens at the standard render cap; three
+  // more items adds ~180 tokens net.
+  //
   // If this breaks, the offender is usually one of:
-  //   - Block A grew (token budget asserted ≤ 800 separately).
+  //   - Block A grew (token budget asserted ≤ 1400 separately).
   //   - Block B grew (operator added too many few-shot examples).
   //   - Per-section caps in Block C were loosened.
   //
   // Don't relax the budget — tighten the per-section caps instead.
-  it("a representative full-envelope prompt fits in 5500 tokens", () => {
+  it("a representative full-envelope prompt fits in 5800 tokens", () => {
     const voice = defaultVoiceProfile();
     voice.signaturePhrases = ["Always glad to help"];
     voice.fewShot = [
@@ -360,8 +364,8 @@ describe("Block A+B+C token budget (Phase 8c)", () => {
         languagesServed: ["fr", "ar", "en", "darija"],
       },
       citations: [
-        // Top-5 items
-        ...Array.from({ length: 5 }, (_, i) => ({
+        // Top-8 items (matches TOP_K_ITEMS in orchestrator.ts post P4r-8).
+        ...Array.from({ length: 8 }, (_, i) => ({
           kind: "item" as const,
           name: `Product ${i + 1} with a moderately long name`,
           brand: "BrandX",
@@ -422,7 +426,7 @@ describe("Block A+B+C token budget (Phase 8c)", () => {
       tokens(result.system[0]!.text) +
       tokens(result.system[1]!.text) +
       tokens(result.userMessage);
-    expect(total).toBeLessThanOrEqual(5500);
+    expect(total).toBeLessThanOrEqual(5800);
   });
 });
 

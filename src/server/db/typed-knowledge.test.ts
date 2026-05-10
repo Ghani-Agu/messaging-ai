@@ -201,16 +201,19 @@ describe("buildItemEmbedText", () => {
     );
   });
 
-  it("includes category alone when brand is null (synced-item path)", () => {
+  it("includes category alone when brand is null AND name doesn't trigger brand inference", () => {
+    // Synced-item path with no inferable brand (first token "Détecteur" isn't
+    // on KNOWN_BRANDS_AT_NAME_START). Brand inference fallback in
+    // buildItemEmbedText is exercised separately in src/lib/items.test.ts.
     const text = buildItemEmbedText({
-      name: "AJAX Détecteur DoorProtect",
+      name: "Détecteur DoorProtect",
       brand: null,
       category: "Sécurité",
       sku: null,
       description: null,
     });
     expect(text).toBe(
-      "AJAX Détecteur DoorProtect — Catégorie: Sécurité",
+      "Détecteur DoorProtect — Catégorie: Sécurité",
     );
     expect(text).not.toContain("Marque:");
   });
