@@ -434,6 +434,106 @@ export async function keywordSearchItems(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Brand aggregate — full-catalog counts per brand, with category breakdown.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type BrandAggregateCategoryRow = {
+  /** null when the underlying items have no category set. */
+  category: string | null;
+  count: number;
+  inStock: number;
+};
+
+export type BrandAggregateResult = {
+  total: number;
+  inStock: number;
+  outOfStock: number;
+  /** Top N categories by count, sorted descending. */
+  categories: BrandAggregateCategoryRow[];
+};
+
+/**
+ * Full-catalog aggregate for one brand inside one tenant. Used by the brand
+ * summary line the retriever emits when a customer asks about a brand —
+ * lets the brain answer "wsh 3andkom Dahua?" with category-aware totals
+ * pulled from the WHOLE catalog, not just the keyword candidate pool the
+ * retriever surfaces (capped at 30 rows).
+ *
+ * The query runs in a single round-trip: a CTE materializes the brand's
+ * rows once, then the outer query reads two GROUPING SETS off it — the
+ * `()` set produces the overall totals row (category IS NULL in the
+ * result), and the per-category set produces one row per category. The
+ * per-category rows are sorted by count desc and capped to `topCategories`
+ * AFTER the union, so the cap doesn't cost us the overall row.
+ *
+ * The caller groups rows back into the shaped result; category=null in
+ * the data is preserved so the renderer can place those items into an
+ * "Autres" / Other bucket distinct from the overall totals row.
+ */
+export async function getBrandAggregate(args: {
+  tenantId: string;
+  brand: string;
+  topCategories: number;
+}): Promise<BrandAggregateResult> {
+  type Row = {
+    grouping_kind: 0 | 1; // 0 = overall, 1 = per-category
+    category: string | null;
+    count: bigint;
+    in_stock: bigint;
+    out_of_stock: bigint;
+  };
+  const rows = await prisma.$queryRaw<Row[]>`
+    WITH brand_items AS (
+      SELECT "category", "availability"
+        FROM "KnowledgeItem"
+       WHERE "tenantId" = ${args.tenantId}
+         AND "brand" = ${args.brand}
+    ),
+    overall AS (
+      SELECT 0 AS grouping_kind,
+             NULL::text AS category,
+             COUNT(*) AS count,
+             COUNT(*) FILTER (WHERE "availability" = 'IN_STOCK') AS in_stock,
+             COUNT(*) FILTER (WHERE "availability" = 'OUT_OF_STOCK') AS out_of_stock
+        FROM brand_items
+    ),
+    by_category AS (
+      SELECT 1 AS grouping_kind,
+             "category",
+             COUNT(*) AS count,
+             COUNT(*) FILTER (WHERE "availability" = 'IN_STOCK') AS in_stock,
+             0::bigint AS out_of_stock
+        FROM brand_items
+       GROUP BY "category"
+       ORDER BY count DESC, "category" NULLS LAST
+       LIMIT ${args.topCategories}
+    )
+    SELECT grouping_kind, category, count, in_stock, out_of_stock FROM overall
+    UNION ALL
+    SELECT grouping_kind, category, count, in_stock, out_of_stock FROM by_category
+  `;
+
+  let total = 0;
+  let inStock = 0;
+  let outOfStock = 0;
+  const categories: BrandAggregateCategoryRow[] = [];
+  for (const r of rows) {
+    if (r.grouping_kind === 0) {
+      total = Number(r.count);
+      inStock = Number(r.in_stock);
+      outOfStock = Number(r.out_of_stock);
+    } else {
+      categories.push({
+        category: r.category,
+        count: Number(r.count),
+        inStock: Number(r.in_stock),
+      });
+    }
+  }
+  return { total, inStock, outOfStock, categories };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Verification (operator-asserted "still correct")
 // ─────────────────────────────────────────────────────────────────────────────
 

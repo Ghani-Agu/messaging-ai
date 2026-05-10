@@ -7,6 +7,7 @@ import {
   type RawSearchHit,
 } from "@/server/db/knowledge";
 import {
+  getBrandAggregate,
   keywordSearchItems,
   lexicalSearchItems,
   vectorSearchItems,
@@ -21,7 +22,10 @@ import {
   RRF_K,
 } from "./limits";
 import type { SupportedLanguage } from "@/lib/validators";
-import type { BrandSummary } from "@/server/ai/prompts/system";
+import {
+  BRAND_SUMMARY_NULL_CATEGORY_LABEL,
+  type BrandSummary,
+} from "@/server/ai/prompts/system";
 
 /**
  * Retrieval — three channels, all tenant-scoped:
@@ -215,19 +219,22 @@ const KEYWORD_MAX_RESULTS = 30;
 const KEYWORD_MERGE_THRESHOLD = 3;
 /** Top slots reserved for keyword matches when the merge path fires. */
 const KEYWORD_TOP_SLOTS = 5;
-/** Min same-brand count in the keyword pool to render a [BRAND SUMMARY] line. */
+/** Min same-brand count in the keyword pool to TRIGGER a [BRAND SUMMARY] block. */
 const BRAND_SUMMARY_THRESHOLD = 3;
-/** Cap on the number of [BRAND SUMMARY] lines (top brands by count). */
+/** Cap on the number of [BRAND SUMMARY] blocks (top brands by keyword-pool count). */
 const BRAND_SUMMARY_MAX = 3;
+/** Top N categories rendered per brand in the [BRAND SUMMARY] block. */
+const BRAND_SUMMARY_TOP_CATEGORIES = 6;
 
 export type ItemRetrievalResult = {
   items: RetrievedItem[];
   /**
-   * Aggregate brand counts from the WIDER keyword candidate pool (up to
-   * KEYWORD_MAX_RESULTS=30 rows). Lets the brain answer brand-frequency
-   * questions like "3andkom Ajax?" using catalog-level counts even when
-   * only top-K=8 items make it into the citation list. Empty when no
-   * brand reaches BRAND_SUMMARY_THRESHOLD (3) in the pool.
+   * Per-brand category-aware aggregate for brands the customer is asking
+   * about. A brand is included when its keyword-pool count reaches
+   * BRAND_SUMMARY_THRESHOLD (3); the actual totals + per-category
+   * breakdown then come from a fresh FULL-CATALOG SQL aggregate (not
+   * the keyword pool, which is capped at 30 rows). Empty when no brand
+   * crosses the trigger threshold.
    */
   brandSummaries: BrandSummary[];
 };
@@ -267,43 +274,76 @@ export async function retrieveItems(args: {
 
   return {
     items: mergeItems({ vectorHits, lexicalHits, keywordHits, topK }),
-    brandSummaries: computeBrandSummaries(keywordHits),
+    brandSummaries: await computeBrandSummaries({
+      tenantId: args.tenantId,
+      keywordHits,
+    }),
   };
 }
 
 /**
- * Group keyword pool by brand, count availability, return top-N brands
- * that meet the BRAND_SUMMARY_THRESHOLD (3). The wider pool (up to 30
- * keyword hits) means the counts reflect what's actually in the catalog
- * for the brand the customer asked about, not just the top-K cited rows.
+ * Pick brands worth summarizing from the keyword candidate pool, then run
+ * one full-catalog aggregate per brand to get the real totals + per-category
+ * breakdown. The keyword pool is the trigger (it tells us which brands the
+ * customer's message is hitting), but the numbers come from the catalog so
+ * they don't get clipped at KEYWORD_MAX_RESULTS=30.
  *
- * Items with brand=null are skipped (no useful "summary by brand" to
- * render when the catalog doesn't carry brand metadata).
+ * Items with brand=null are skipped at the trigger stage — no useful
+ * "summary by brand" without a brand. Inside the per-brand aggregate,
+ * items with category=null fold into a single "Autres" bucket so the
+ * customer sees a complete picture even when some catalog rows are
+ * un-categorised.
+ *
+ * Per-brand queries run in parallel — BRAND_SUMMARY_MAX is 3, so the
+ * fan-out is bounded and well under the pool budget.
  */
-function computeBrandSummaries(keywordHits: RawItemHit[]): BrandSummary[] {
-  const byBrand = new Map<
-    string,
-    { total: number; inStock: number; outOfStock: number }
-  >();
-  for (const h of keywordHits) {
+async function computeBrandSummaries(args: {
+  tenantId: string;
+  keywordHits: RawItemHit[];
+}): Promise<BrandSummary[]> {
+  const triggerCounts = new Map<string, number>();
+  for (const h of args.keywordHits) {
     if (!h.brand) continue;
-    let entry = byBrand.get(h.brand);
-    if (!entry) {
-      entry = { total: 0, inStock: 0, outOfStock: 0 };
-      byBrand.set(h.brand, entry);
-    }
-    entry.total += 1;
-    if (h.availability === "IN_STOCK") entry.inStock += 1;
-    else if (h.availability === "OUT_OF_STOCK") entry.outOfStock += 1;
+    triggerCounts.set(h.brand, (triggerCounts.get(h.brand) ?? 0) + 1);
   }
+  const eligible = [...triggerCounts.entries()]
+    .filter(([, c]) => c >= BRAND_SUMMARY_THRESHOLD)
+    .sort(([a, ca], [b, cb]) => cb - ca || a.localeCompare(b))
+    .slice(0, BRAND_SUMMARY_MAX)
+    .map(([brand]) => brand);
+
+  if (eligible.length === 0) return [];
+
+  const aggregates = await Promise.all(
+    eligible.map((brand) =>
+      getBrandAggregate({
+        tenantId: args.tenantId,
+        brand,
+        topCategories: BRAND_SUMMARY_TOP_CATEGORIES,
+      }),
+    ),
+  );
+
   const summaries: BrandSummary[] = [];
-  for (const [brand, counts] of byBrand) {
-    if (counts.total < BRAND_SUMMARY_THRESHOLD) continue;
-    summaries.push({ brand, ...counts });
+  for (let i = 0; i < eligible.length; i++) {
+    const brand = eligible[i]!;
+    const agg = aggregates[i]!;
+    // Defensive: if the catalog state changed between keyword search and
+    // the aggregate (concurrent delete), skip rendering an empty summary.
+    if (agg.total === 0) continue;
+    summaries.push({
+      brand,
+      total: agg.total,
+      inStock: agg.inStock,
+      outOfStock: agg.outOfStock,
+      categoryBreakdown: agg.categories.map((c) => ({
+        category: c.category ?? BRAND_SUMMARY_NULL_CATEGORY_LABEL,
+        count: c.count,
+        inStock: c.inStock,
+      })),
+    });
   }
-  return summaries
-    .sort((a, b) => b.total - a.total || a.brand.localeCompare(b.brand))
-    .slice(0, BRAND_SUMMARY_MAX);
+  return summaries;
 }
 
 /**

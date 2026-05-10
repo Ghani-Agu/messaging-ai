@@ -17,16 +17,18 @@ import type {
  * every tenant, Block B is identical within a tenant. Block C (the
  * per-request runtime block) lives on the user turn, not here.
  *
- * Block A target: ≤ 1650 input tokens (asserted by the unit test).
+ * Block A target: ≤ 1700 input tokens (asserted by the unit test).
  * Block A measured: 594 tokens (Phase 4 initial); briefly 794 during
  * the P4r-3 schema-split attempt; 738 after revert; ~1119 after the
  * P4r-7 Algerian-Darija coaching; ~1377 after the forbidden-Moroccan
  * + French-fallback additions; ~1456 after the CONTACT INFO bullet;
  * ~1601 after the BRAND SUMMARY bullet (catalog-frequency answers for
- * "3andkom Ajax?"-style questions). Each addition is load-bearing for
- * a customer-facing failure mode the prior eval hit. Never broaden
- * the LANGUAGE HANDLING section to "Maghrebi Darija" — the platform
- * serves Algerian businesses specifically.
+ * "3andkom Ajax?"-style questions); ~1640 after the BRAND SUMMARY
+ * bullet was rewritten for category-aware menu replies (Dahua across
+ * cameras IP / NVR / switches — ask the customer to narrow down). Each
+ * addition is load-bearing for a customer-facing failure mode the prior
+ * eval hit. Never broaden the LANGUAGE HANDLING section to "Maghrebi
+ * Darija" — the platform serves Algerian businesses specifically.
  *
  * Pure functions — no I/O, no globals, easy to unit-test.
  */
@@ -65,7 +67,7 @@ CITATION KINDS
 - When a citation is tagged Q&A (USE NEAR-VERBATIM), use its answer text directly. Only adapt for the customer's language and register — do not paraphrase or summarize the answer.
 - OPERATIONAL FACTS (hours, locations, etc.) are authoritative for the field they describe; treat as ground truth.
 - CONTACT INFO entries are the operator-curated human-handoff list. Do NOT mention them in normal answers — only when you need to escalate to a human (see ESCALATION below). When you do escalate, list ALL available CONTACT INFO entries so the customer can pick whichever fits their need (phone, email, by role). Track the citation indices you list in citations_used.
-- [BRAND SUMMARY] lines (when present, at the top of CITATIONS) give catalog-wide counts for a brand the customer is asking about: total products + in-stock / out-of-stock breakdown. When the customer asks about a brand or product family ("3andkom Ajax?", "Quels Dahua avez-vous ?"), USE these counts to give a high-level answer ("we have 11 Ajax products, 6 in stock") and then mention the most relevant 2-3 specific products from the [N] STRUCTURED ITEM citations. Do not list every single product. Brand summaries are NOT numbered citations — do not put them in citations_used; cite the underlying [N] STRUCTURED ITEM rows instead.
+- [BRAND SUMMARY] blocks (when present, at the top of CITATIONS) give catalog-wide counts for a brand the customer is asking about — total products + per-category breakdown (number of products + in-stock count for each category). When the customer asks about a brand or product family ("3andkom Dahua?", "Quels Dahua avez-vous?"), present the categories to the customer as a menu and ask which one they need — DON'T dump every product at once. Example: "We have Dahua across cameras IP (18), NVR (8), and switches (6) — which do you need?" Once they pick a category, you can list specific products from that category using the STRUCTURED ITEM citations. If the brand has only one category, give the count and mention 2-3 specific products. Brand summaries are NOT numbered citations — do not put them in citations_used; cite the underlying [N] STRUCTURED ITEM rows instead.
 
 LANGUAGE HANDLING
 - Mirror the customer's language precisely. Match their script choice: Arabic-script in → Arabic-script out; Latin/Arabizi in → Latin/Arabizi out. Do not switch the customer's language unless they ask.
@@ -444,31 +446,78 @@ function renderLocations(locs: OperationalFactsLocation[]): string {
 }
 
 /**
- * Aggregate "the catalog has N <brand> products, X in stock, Y out" line
+ * Aggregate "the catalog has N <brand> products across M categories" block
  * rendered at the top of CITATIONS in Block C. Lets the brain answer
- * brand-frequency questions ("3andkom Ajax?") quantitatively without
- * having to list every individual SKU. Computed in the orchestrator
- * from the keyword search pool (NOT just the top-K cited items, so the
- * counts reflect the wider candidate set the customer is implicitly
- * asking about).
+ * brand-frequency questions ("3andkom Dahua?", "Quels Dahua avez-vous?")
+ * with a category-aware menu — so the model can ask the customer to
+ * narrow down instead of dumping every SKU. Computed in the retriever
+ * from a full-catalog SQL aggregate per detected brand (NOT just the
+ * keyword candidate pool), so the counts reflect the entire catalog
+ * for the brand the customer is implicitly asking about.
+ *
+ * Per the task spec the category list is capped at 6 (top by count);
+ * items with null category fold into an "Autres" bucket. Render shape:
+ *   - 0 categories (brand has no items somehow) → header-only line.
+ *   - 1 category → single-line "all in CAT" format.
+ *   - 2+ categories → multi-line breakdown.
  */
 export type BrandSummary = {
   brand: string;
   total: number;
   inStock: number;
   outOfStock: number;
+  /**
+   * Category breakdown for this brand. Each entry already aggregates
+   * across the catalog (count + inStock per category). Sorted by count
+   * desc, capped at 6 by the retriever.
+   */
+  categoryBreakdown: BrandCategoryBreakdown[];
 };
 
+export type BrandCategoryBreakdown = {
+  /** Display label — "Autres" for items with no category set. */
+  category: string;
+  count: number;
+  inStock: number;
+};
+
+/** Label used in the prompt for the null-category bucket. */
+export const BRAND_SUMMARY_NULL_CATEGORY_LABEL = "Autres";
+
+function productsLabel(n: number): string {
+  return `${n} ${n === 1 ? "product" : "products"}`;
+}
+
+function renderStockSuffix(inStock: number, outOfStock: number): string | null {
+  if (inStock <= 0 && outOfStock <= 0) return null;
+  const bits: string[] = [];
+  if (inStock > 0) bits.push(`${inStock} in stock`);
+  if (outOfStock > 0) bits.push(`${outOfStock} out of stock`);
+  return bits.join(", ");
+}
+
 function renderBrandSummary(s: BrandSummary): string {
-  const productsLabel = `${s.total} ${s.total === 1 ? "product" : "products"}`;
-  const parts: string[] = [productsLabel];
-  if (s.inStock > 0 || s.outOfStock > 0) {
-    const stockBits: string[] = [];
-    if (s.inStock > 0) stockBits.push(`${s.inStock} in stock`);
-    if (s.outOfStock > 0) stockBits.push(`${s.outOfStock} out of stock`);
-    parts.push(stockBits.join(", "));
+  const cats = s.categoryBreakdown;
+  const stockSuffix = renderStockSuffix(s.inStock, s.outOfStock);
+
+  if (cats.length === 0) {
+    const parts: string[] = [productsLabel(s.total)];
+    if (stockSuffix) parts.push(stockSuffix);
+    return `[BRAND SUMMARY] ${s.brand} — ${parts.join(": ")}`;
   }
-  return `[BRAND SUMMARY] ${s.brand} — ${parts.join(": ")}`;
+
+  if (cats.length === 1) {
+    const c = cats[0]!;
+    const tail = stockSuffix ? `: ${stockSuffix}` : "";
+    return `[BRAND SUMMARY] ${s.brand} — ${productsLabel(s.total)}, all in ${c.category}${tail}`;
+  }
+
+  const header = `[BRAND SUMMARY] ${s.brand} — ${s.total} products across ${cats.length} categories:`;
+  const catLines = cats.map((c) => {
+    const inStockBit = c.inStock > 0 ? `, ${c.inStock} in stock` : "";
+    return `    - ${c.category} (${productsLabel(c.count)}${inStockBit})`;
+  });
+  return [header, ...catLines].join("\n");
 }
 
 export function buildBlockC(args: {

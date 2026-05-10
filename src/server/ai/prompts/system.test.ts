@@ -29,7 +29,11 @@ const tokens = (s: string) => enc.encode(s).length;
 // teaches the model to read aggregate [BRAND SUMMARY] lines at the top
 // of CITATIONS for brand-frequency questions instead of listing every
 // SKU. ~145 tokens added; measured ~1601.
-const BLOCK_A_BUDGET = 1650;
+// Bumped 1650 → 1700 when the BRAND SUMMARY bullet was rewritten for
+// category-aware menu replies (the model now presents categories and
+// asks the customer to narrow down rather than picking 5 products
+// itself). ~30 tokens added; measured ~1640.
+const BLOCK_A_BUDGET = 1700;
 
 describe("Block A — platform rules", () => {
   it("stays under the token budget", () => {
@@ -256,7 +260,7 @@ describe("buildBlockA / buildBlockB / buildBlockC", () => {
     expect(c).not.toContain("laptop");
   });
 
-  it("buildBlockC prepends [BRAND SUMMARY] lines before [N] citations", () => {
+  it("buildBlockC renders single-category brand summary in the compact 'all in CAT' form", () => {
     const c = buildBlockC({
       citations: [
         {
@@ -272,12 +276,98 @@ describe("buildBlockA / buildBlockB / buildBlockC", () => {
       history: [],
       message: "ajax?",
       brandSummaries: [
-        { brand: "Ajax", total: 11, inStock: 6, outOfStock: 5 },
+        {
+          brand: "Ajax",
+          total: 11,
+          inStock: 6,
+          outOfStock: 5,
+          categoryBreakdown: [{ category: "ALARM SYSTEM", count: 11, inStock: 6 }],
+        },
       ],
     });
-    expect(c).toContain("[BRAND SUMMARY] Ajax — 11 products: 6 in stock, 5 out of stock");
-    // BRAND SUMMARY line precedes the first numbered citation.
+    expect(c).toContain(
+      "[BRAND SUMMARY] Ajax — 11 products, all in ALARM SYSTEM: 6 in stock, 5 out of stock",
+    );
+    // BRAND SUMMARY block precedes the first numbered citation.
     expect(c.indexOf("[BRAND SUMMARY]")).toBeLessThan(c.indexOf("[1] STRUCTURED ITEM"));
+  });
+
+  it("buildBlockC renders multi-category brand summary with per-category lines", () => {
+    const c = buildBlockC({
+      citations: [],
+      history: [],
+      message: "wsh 3andkom Dahua?",
+      brandSummaries: [
+        {
+          brand: "Dahua",
+          total: 47,
+          inStock: 28,
+          outOfStock: 19,
+          categoryBreakdown: [
+            { category: "Caméras IP", count: 18, inStock: 12 },
+            { category: "Interphones", count: 10, inStock: 6 },
+            { category: "NVR", count: 8, inStock: 5 },
+            { category: "Switches", count: 6, inStock: 4 },
+            { category: "Access control", count: 5, inStock: 1 },
+          ],
+        },
+      ],
+    });
+    expect(c).toContain("[BRAND SUMMARY] Dahua — 47 products across 5 categories:");
+    expect(c).toContain("- Caméras IP (18 products, 12 in stock)");
+    expect(c).toContain("- Interphones (10 products, 6 in stock)");
+    expect(c).toContain("- NVR (8 products, 5 in stock)");
+    expect(c).toContain("- Switches (6 products, 4 in stock)");
+    expect(c).toContain("- Access control (5 products, 1 in stock)");
+    // Header precedes the per-category lines.
+    expect(c.indexOf("across 5 categories")).toBeLessThan(c.indexOf("Caméras IP"));
+  });
+
+  it("buildBlockC omits the in-stock suffix on a category with zero in-stock", () => {
+    const c = buildBlockC({
+      citations: [],
+      history: [],
+      message: "?",
+      brandSummaries: [
+        {
+          brand: "Misc",
+          total: 5,
+          inStock: 0,
+          outOfStock: 5,
+          categoryBreakdown: [
+            { category: "Sold out batch", count: 5, inStock: 0 },
+          ],
+        },
+      ],
+    });
+    // Single-category compact form, no "all in X: 0 in stock" noise.
+    expect(c).toContain(
+      "[BRAND SUMMARY] Misc — 5 products, all in Sold out batch: 5 out of stock",
+    );
+    expect(c).not.toContain("0 in stock");
+  });
+
+  it("buildBlockC labels uncategorised items as 'Autres' inside multi-category breakdown", () => {
+    const c = buildBlockC({
+      citations: [],
+      history: [],
+      message: "?",
+      brandSummaries: [
+        {
+          brand: "Misc",
+          total: 4,
+          inStock: 2,
+          outOfStock: 0,
+          categoryBreakdown: [
+            { category: "Cables", count: 3, inStock: 2 },
+            { category: "Autres", count: 1, inStock: 0 },
+          ],
+        },
+      ],
+    });
+    expect(c).toContain("[BRAND SUMMARY] Misc — 4 products across 2 categories:");
+    expect(c).toContain("- Cables (3 products, 2 in stock)");
+    expect(c).toContain("- Autres (1 product)");
   });
 
   it("buildBlockC omits BRAND SUMMARY block when summaries is empty/undefined", () => {
@@ -289,12 +379,20 @@ describe("buildBlockA / buildBlockB / buildBlockC", () => {
     expect(c).not.toContain("[BRAND SUMMARY]");
   });
 
-  it("BRAND SUMMARY pluralises singular product counts", () => {
+  it("BRAND SUMMARY falls back to header-only when categoryBreakdown is empty", () => {
     const c = buildBlockC({
       citations: [],
       history: [],
       message: "?",
-      brandSummaries: [{ brand: "Hikvision", total: 1, inStock: 1, outOfStock: 0 }],
+      brandSummaries: [
+        {
+          brand: "Hikvision",
+          total: 1,
+          inStock: 1,
+          outOfStock: 0,
+          categoryBreakdown: [],
+        },
+      ],
     });
     expect(c).toContain("[BRAND SUMMARY] Hikvision — 1 product: 1 in stock");
   });
@@ -304,7 +402,15 @@ describe("buildBlockA / buildBlockB / buildBlockC", () => {
       citations: [],
       history: [],
       message: "?",
-      brandSummaries: [{ brand: "Ubiquiti", total: 3, inStock: 0, outOfStock: 0 }],
+      brandSummaries: [
+        {
+          brand: "Ubiquiti",
+          total: 3,
+          inStock: 0,
+          outOfStock: 0,
+          categoryBreakdown: [],
+        },
+      ],
     });
     // No availability data → just the product count, no ": N in stock, M out".
     expect(c).toContain("[BRAND SUMMARY] Ubiquiti — 3 products");
