@@ -294,6 +294,10 @@ const KIND_BADGE: Record<
     tag: "fact",
     tone: "border-[var(--warning)]/40 text-[var(--warning)]",
   },
+  contact: {
+    tag: "contact",
+    tone: "border-[var(--accent-base)]/40 text-[var(--accent-base)]",
+  },
 };
 
 function CitationStrip({
@@ -428,6 +432,12 @@ function CitationDetailHeader({ citation }: { citation: Citation }) {
           Operational fact · {citation.field}
         </div>
       );
+    case "contact":
+      return (
+        <div className="text-caption uppercase tracking-wide text-[var(--accent-base)]">
+          Contact · {citation.name}
+        </div>
+      );
   }
 }
 
@@ -446,6 +456,8 @@ function citationLabel(c: Citation): string {
       return `Q&A: ${c.question.slice(0, 40)}${c.question.length > 40 ? "…" : ""}`;
     case "operational_fact":
       return `Fact: ${c.field}`;
+    case "contact":
+      return `Contact: ${c.name}`;
   }
 }
 

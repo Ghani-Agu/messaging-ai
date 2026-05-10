@@ -22,8 +22,10 @@ const tokens = (s: string) => enc.encode(s).length;
 // "use French if unsure" fallback rule (the substitute-for-Moroccan
 // register lock — WBP eval showed Algerian customers reject Moroccan-
 // flavored replies even when the rest of the reply is correct).
-// Measured ~1377 after that change. See the system.ts comment.
-const BLOCK_A_BUDGET = 1400;
+// Bumped 1400 → 1500 for the CONTACT INFO citation-kind bullet:
+// telling the model to list ALL contacts on escalation and to ignore
+// them on normal answers. ~79 tokens added; measured ~1456.
+const BLOCK_A_BUDGET = 1500;
 
 describe("Block A — platform rules", () => {
   it("stays under the token budget", () => {

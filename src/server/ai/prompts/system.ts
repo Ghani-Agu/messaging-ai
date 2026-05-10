@@ -17,19 +17,17 @@ import type {
  * every tenant, Block B is identical within a tenant. Block C (the
  * per-request runtime block) lives on the user turn, not here.
  *
- * Block A target: ≤ 1400 input tokens (asserted by the unit test).
+ * Block A target: ≤ 1500 input tokens (asserted by the unit test).
  * Block A measured: 594 tokens (Phase 4 initial); briefly 794 during
  * the P4r-3 schema-split attempt; 738 after revert; ~1119 after the
- * P4r-7 Algerian-Darija coaching; ~1300 after the forbidden-Moroccan
- * + French-fallback additions. The added tokens are load-bearing
- * for product quality with Algerian customers — without an explicit
- * forbidden list, the model silently substitutes Moroccan vocab
- * (kankteb, zwina, dyal, safi, bzaf) into otherwise-Algerian
- * replies, which Algerian customers immediately reject. The
- * "use French if unsure" fallback routes uncertainty away from the
- * wrong register entirely. Never broaden the LANGUAGE HANDLING
- * section to "Maghrebi Darija" — the platform serves Algerian
- * businesses specifically.
+ * P4r-7 Algerian-Darija coaching; ~1377 after the forbidden-Moroccan
+ * + French-fallback additions; ~1456 after the CONTACT INFO bullet
+ * (operator-managed escalation contacts). The added tokens are
+ * load-bearing: forbidden-Moroccan keeps the register clean for
+ * Algerian customers; CONTACT INFO routes human handoff to the
+ * tenant's curated phone/email list instead of "contact us" dead
+ * ends. Never broaden the LANGUAGE HANDLING section to "Maghrebi
+ * Darija" — the platform serves Algerian businesses specifically.
  *
  * Pure functions — no I/O, no globals, easy to unit-test.
  */
@@ -63,10 +61,11 @@ GROUNDING (highest priority)
 - Track every citation index you used in citations_used.
 
 CITATION KINDS
-- Each citation is tagged with one of: STRUCTURED ITEM, CITATION (free text), Q&A, OPERATIONAL FACT.
+- Each citation is tagged with one of: STRUCTURED ITEM, CITATION (free text), Q&A, OPERATIONAL FACT, CONTACT INFO.
 - When STRUCTURED ITEMS contain a field directly relevant to the question (price, availability, specs), prefer that field over CITATIONS. CITATIONS are reference text; STRUCTURED ITEMS are the tenant's authoritative product/service data.
 - When a citation is tagged Q&A (USE NEAR-VERBATIM), use its answer text directly. Only adapt for the customer's language and register — do not paraphrase or summarize the answer.
 - OPERATIONAL FACTS (hours, locations, etc.) are authoritative for the field they describe; treat as ground truth.
+- CONTACT INFO entries are the operator-curated human-handoff list. Do NOT mention them in normal answers — only when you need to escalate to a human (see ESCALATION below). When you do escalate, list ALL available CONTACT INFO entries so the customer can pick whichever fits their need (phone, email, by role). Track the citation indices you list in citations_used.
 
 LANGUAGE HANDLING
 - Mirror the customer's language precisely. Match their script choice: Arabic-script in → Arabic-script out; Latin/Arabizi in → Latin/Arabizi out. Do not switch the customer's language unless they ask.
@@ -290,11 +289,27 @@ export type RenderedOperationalFactCitation = {
   value: OperationalFactsTier2[OperationalFactField];
 };
 
+/**
+ * Operator-managed escalation contacts (phone / email). Always injected
+ * into Block C (capped at MAX_CONTACTS_IN_PROMPT) so the brain can list
+ * them when it escalates. Block A's CONTACTS instruction directs the
+ * model to use these only on human-handoff turns; otherwise they sit in
+ * the citation pool unused.
+ */
+export type RenderedContactCitation = {
+  kind: "contact";
+  name: string;
+  role?: string | null;
+  phone?: string | null;
+  email?: string | null;
+};
+
 export type RenderedCitation =
   | RenderedChunkCitation
   | RenderedItemCitation
   | RenderedQnaCitation
-  | RenderedOperationalFactCitation;
+  | RenderedOperationalFactCitation
+  | RenderedContactCitation;
 
 const MAX_CHUNK_CONTENT_CHARS = 1200;
 /** How many spec key:value pairs to surface per item, after excluding _-prefix keys. */
@@ -307,6 +322,7 @@ const ITEM_SPEC_FIELDS_RENDER_LIMIT = 2;
  *   CITATION        — source/url + truncated content
  *   Q&A             — question + answer (USE NEAR-VERBATIM tag for Block A rule)
  *   OPERATIONAL FACT — field name + rendered value
+ *   CONTACT INFO    — name + optional role + phone + email (escalation-only)
  */
 function renderCitation(c: RenderedCitation, index: number): string {
   switch (c.kind) {
@@ -316,6 +332,8 @@ function renderCitation(c: RenderedCitation, index: number): string {
       return renderQnaCitation(c, index);
     case "operational_fact":
       return renderOperationalFactCitation(c, index);
+    case "contact":
+      return renderContactCitation(c, index);
     case "chunk": {
       const head = c.sourceUrl
         ? `[${index}] CITATION — ${c.sourceName} — ${c.sourceUrl}`
@@ -324,6 +342,17 @@ function renderCitation(c: RenderedCitation, index: number): string {
       return `${head}\n    ${body.replace(/\n/g, "\n    ")}`;
     }
   }
+}
+
+function renderContactCitation(c: RenderedContactCitation, index: number): string {
+  const headBits: string[] = [c.name];
+  if (c.role) headBits.push(`(${c.role})`);
+  const fieldBits: string[] = [];
+  if (c.phone) fieldBits.push(`Phone: ${c.phone}`);
+  if (c.email) fieldBits.push(`Email: ${c.email}`);
+  const lines = [`[${index}] CONTACT INFO — ${headBits.join(" ")}`];
+  if (fieldBits.length > 0) lines.push(`    ${fieldBits.join(" | ")}`);
+  return lines.join("\n");
 }
 
 function renderItemCitation(c: RenderedItemCitation, index: number): string {

@@ -7,7 +7,7 @@ import {
   BookOpen,
   Building2,
   Check,
-  CreditCard,
+  ContactRound,
   Laptop,
   LayoutDashboard,
   LogOut,
@@ -175,10 +175,10 @@ export function CommandPalette({
       perform: () => navigate(`/${tenantSlug}/settings/general`),
     },
     {
-      id: "nav:billing",
-      label: "Billing",
-      icon: CreditCard,
-      perform: () => navigate(`/${tenantSlug}/billing`),
+      id: "nav:contacts",
+      label: "Contacts",
+      icon: ContactRound,
+      perform: () => navigate(`/${tenantSlug}/contacts`),
     },
   ];
 

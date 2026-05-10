@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   BookOpen,
   Building2,
-  CreditCard,
+  ContactRound,
   Database,
   HelpCircle,
   LayoutDashboard,
@@ -51,7 +51,7 @@ const ITEMS: NavItem[] = [
   { href: (s) => `/${s}/channels`, label: "Channels", icon: Plug, phase: 5 },
   { href: (s) => `/${s}/playground`, label: "Playground", icon: Sparkles, phase: 4 },
   { href: (s) => `/${s}/settings`, label: "Settings", icon: Settings },
-  { href: (s) => `/${s}/billing`, label: "Billing", icon: CreditCard, phase: 9 },
+  { href: (s) => `/${s}/contacts`, label: "Contacts", icon: ContactRound },
 ];
 
 export type SidebarNavCounts = Partial<Record<CountKey, number>>;

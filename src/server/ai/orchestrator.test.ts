@@ -37,6 +37,10 @@ vi.mock("../db/operational-facts", async () => {
   };
 });
 
+vi.mock("../db/contacts", () => ({
+  listContactsForBrain: vi.fn(async () => []),
+}));
+
 import { prisma } from "../db/client";
 import {
   retrieveChunks,
@@ -44,6 +48,7 @@ import {
   retrieveQnaMatches,
 } from "../knowledge/retriever";
 import { getOperationalFacts } from "../db/operational-facts";
+import { listContactsForBrain } from "../db/contacts";
 import { runBrain } from "./orchestrator";
 import {
   __resetClaudeClientForTests,
@@ -97,6 +102,9 @@ beforeEach(() => {
   // Default: no operational facts (pre-Phase-8 tenant). Specific tests
   // override per-call to inject tier-1 / tier-2 envelopes.
   vi.mocked(getOperationalFacts).mockResolvedValue({});
+  // Default: no contacts. Tests for the escalation-citation path override
+  // with the row shape listContactsForBrain returns (a Contact[] from Prisma).
+  vi.mocked(listContactsForBrain).mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -135,6 +143,60 @@ describe("runBrain — happy path with stub client", () => {
     expect(r.escalation).toBeNull();
     expect(r.aiMetadata.claudeRecommendedEscalation).toBe(false);
     expect(r.aiMetadata.modelId).toBe("stub");
+  });
+});
+
+describe("runBrain — contacts injection (always-on)", () => {
+  it("appends contact citations after chunks/items/qna/facts when contacts exist", async () => {
+    vi.mocked(listContactsForBrain).mockResolvedValueOnce([
+      {
+        id: "ct-1",
+        tenantId: "tenant-1",
+        name: "Sales team",
+        phone: "+213 555 12 34 56",
+        email: null,
+        role: "Sales",
+        position: 0,
+        createdAt: new Date("2026-05-10"),
+        updatedAt: new Date("2026-05-10"),
+      },
+      {
+        id: "ct-2",
+        tenantId: "tenant-1",
+        name: "Returns desk",
+        phone: null,
+        email: "returns@acme.test",
+        role: null,
+        position: 1,
+        createdAt: new Date("2026-05-10"),
+        updatedAt: new Date("2026-05-10"),
+      },
+    ]);
+    const r = await runBrain({
+      tenantId: "tenant-1",
+      message: "Hi",
+    });
+    // Default mocks: 3 chunks + 0 items + 0 qna + 0 facts → contact slots
+    // land at indices 4 and 5.
+    const contactCitations = r.citations.filter((c) => c.kind === "contact");
+    expect(contactCitations).toHaveLength(2);
+    expect(contactCitations[0]!.index).toBe(4);
+    expect(contactCitations[1]!.index).toBe(5);
+    if (contactCitations[0]!.kind !== "contact")
+      throw new Error("expected contact citation kind");
+    expect(contactCitations[0]!.contactId).toBe("ct-1");
+    expect(contactCitations[0]!.name).toBe("Sales team");
+    expect(contactCitations[0]!.preview).toContain("Sales");
+    expect(contactCitations[0]!.preview).toContain("+213");
+  });
+
+  it("does not add contact citations when the tenant has none", async () => {
+    // beforeEach already sets the default to [].
+    const r = await runBrain({
+      tenantId: "tenant-1",
+      message: "Hi",
+    });
+    expect(r.citations.every((c) => c.kind !== "contact")).toBe(true);
   });
 });
 

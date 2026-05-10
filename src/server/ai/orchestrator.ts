@@ -15,6 +15,7 @@ import {
   pickTier1,
   type OperationalFactsTier2,
 } from "@/server/db/operational-facts";
+import { listContactsForBrain } from "@/server/db/contacts";
 import { embed } from "@/server/ai/embeddings";
 import { detectLanguage } from "@/lib/language-detect";
 import {
@@ -232,6 +233,13 @@ export type BrainCitation =
       kind: "operational_fact";
       field: OperationalFactField;
       preview: string;
+    }
+  | {
+      index: number;
+      kind: "contact";
+      contactId: string;
+      name: string;
+      preview: string;
     };
 
 export type BrainResult = {
@@ -381,15 +389,18 @@ async function prepareCallContext(input: BrainInput): Promise<CallContext> {
   const trimmedMessage = message.trim();
   const history = (input.history ?? []).slice(-HISTORY_TURNS_DEFAULT);
 
-  // Load tenant + facts in parallel — both are independent reads keyed by
-  // tenantId. We don't start retrieval here yet because we want a fast
-  // tenant-not-found error before burning embedding cost.
-  const [tenant, factsData] = await Promise.all([
+  // Load tenant + facts + contacts in parallel — three independent reads
+  // keyed by tenantId. We don't start retrieval here yet because we want a
+  // fast tenant-not-found error before burning embedding cost. Contacts ride
+  // every turn (cap 6 per src/lib/contacts.ts) so the brain has the
+  // operator-curated escalation list ready whenever it decides to hand off.
+  const [tenant, factsData, contacts] = await Promise.all([
     prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { name: true, settings: true },
     }),
     getOperationalFacts({ tenantId }),
+    listContactsForBrain(tenantId),
   ]);
   if (!tenant) throw new Error(`tenant not found: ${tenantId}`);
   const voice = getVoiceProfile(tenant.settings as Prisma.JsonValue);
@@ -525,6 +536,29 @@ async function prepareCallContext(input: BrainInput): Promise<CallContext> {
     });
   }
 
+  // Contacts ride every turn (cap MAX_CONTACTS_IN_PROMPT, applied by
+  // listContactsForBrain). Always at the tail of the citation list so the
+  // numbered prefix doesn't shift when other citations vary. Block A's
+  // CONTACT INFO instruction tells the model to use them only on escalation
+  // turns, not on every reply.
+  for (const c of contacts) {
+    const idx = renderedCitations.length + 1;
+    renderedCitations.push({
+      kind: "contact",
+      name: c.name,
+      role: c.role,
+      phone: c.phone,
+      email: c.email,
+    });
+    brainCitations.push({
+      index: idx,
+      kind: "contact",
+      contactId: c.id,
+      name: c.name,
+      preview: [c.role, c.phone, c.email].filter(Boolean).join(" · "),
+    });
+  }
+
   const { system, userMessage } = buildPrompt({
     tenantName: tenant.name,
     voice,
@@ -551,7 +585,7 @@ async function prepareCallContext(input: BrainInput): Promise<CallContext> {
     const sectionTokens = sectionTokenCounts(renderedCitations);
     console.log(
       `[brain-budget] tenant=${tenantId} A=${blockA} B=${blockB} C=${userTokens} ` +
-        `(items=${sectionTokens.items} chunks=${sectionTokens.chunks} qna=${sectionTokens.qna} facts=${sectionTokens.facts}) ` +
+        `(items=${sectionTokens.items} chunks=${sectionTokens.chunks} qna=${sectionTokens.qna} facts=${sectionTokens.facts} contacts=${sectionTokens.contacts}) ` +
         `total=${inputTokens}/${MAX_INPUT_TOKEN_HEADROOM}`,
     );
   }
@@ -879,14 +913,16 @@ function sectionTokenCounts(citations: RenderedCitation[]): {
   chunks: number;
   qna: number;
   facts: number;
+  contacts: number;
 } {
-  const totals = { items: 0, chunks: 0, qna: 0, facts: 0 };
+  const totals = { items: 0, chunks: 0, qna: 0, facts: 0, contacts: 0 };
   for (const c of citations) {
     const tokens = countTokens(JSON.stringify(c));
     if (c.kind === "item") totals.items += tokens;
     else if (c.kind === "chunk") totals.chunks += tokens;
     else if (c.kind === "qna") totals.qna += tokens;
     else if (c.kind === "operational_fact") totals.facts += tokens;
+    else if (c.kind === "contact") totals.contacts += tokens;
   }
   return totals;
 }

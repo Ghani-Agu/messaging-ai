@@ -135,6 +135,7 @@ model Tenant {
   conversations    Conversation[]
   messages         Message[]
   liveDataSources  LiveDataSource[]
+  contacts         Contact[]
 
   @@index([slug])
 }
@@ -612,6 +613,28 @@ model QnaPair {
   @@unique([tenantId, normalizedQuestion])
   @@index([tenantId, createdAt(sort: Desc)])
   @@index([tenantId, language])
+}
+
+// Tenant-managed contact entries — phone numbers / emails the AI suggests
+// when escalating to a human. Replaces the placeholder Billing surface; the
+// brain reads these dynamically rather than baking them into voiceProfile
+// few-shot text. At least one of phone / email must be present (enforced at
+// the Zod layer, not the DB — both columns stay nullable for flexibility).
+model Contact {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String   // e.g. "Sales team" / "Mohamed Karim"
+  phone     String?  // free-form (international formats vary; no validation)
+  email     String?  // standard email format (Zod-validated at write time)
+  role      String?  // free-form label: "Sales" / "Support" / "Returns"
+  position  Int      @default(0) // operator-set ordering; lower first
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
 
 model OperationalFacts {
