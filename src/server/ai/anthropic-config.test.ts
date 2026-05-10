@@ -10,8 +10,8 @@ import {
 } from "./anthropic-config";
 
 describe("anthropic-config — constants", () => {
-  it("default model is the Sonnet 4.5 dated snapshot (P4r-7)", () => {
-    expect(ANTHROPIC_MODEL_DEFAULT).toBe("claude-sonnet-4-5-20250929");
+  it("default model is the Sonnet 4.6 alias (P4r-8 re-upgrade)", () => {
+    expect(ANTHROPIC_MODEL_DEFAULT).toBe("claude-sonnet-4-6");
   });
 
   it("base URL points at Anthropic's API", () => {

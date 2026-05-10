@@ -8,26 +8,30 @@ import "server-only";
  *   1. process.env.ANTHROPIC_MODEL if set → use as-is.
  *   2. else fall back to ANTHROPIC_MODEL_DEFAULT.
  *
- * Pin (P4r-7): `claude-sonnet-4-5-20250929` — dated snapshot of Sonnet
- * 4.5. Switched from `claude-sonnet-4-6` after the P4r-6 brain-eval
- * empirically showed:
- *   - Sonnet 4.6's alias does not support prompt caching (cache_create
- *     and cache_read both 0 even on prefixes well above the 1024-token
- *     minimum). Sonnet 4.5 caches normally — ~47% cost reduction
- *     observed across the 11-row eval bank ($0.107 → $0.057).
- *   - No observable quality differentiator between 4.5 and 4.6 on the
- *     bank. Both produced clean MSA, FR, EN replies and both produced
- *     non-Algerian Darija on rows 4–6 (the latter is solved at the
- *     prompt layer in BLOCK_A_TEXT, not the model layer).
- *   - Dated snapshot (not the `claude-sonnet-4-5` alias) so silent
- *     rotation can't drift quality underneath us.
+ * Pin (P4r-8): `claude-sonnet-4-6` — dateless alias for Sonnet 4.6
+ * (Feb 2026 release). Re-upgraded from `claude-sonnet-4-5-20250929`
+ * for modestly better instruction-following + source-information
+ * accuracy per Anthropic's published benchmarks. No code structural
+ * changes — single constant updated; pricing already covered (same
+ * $3/$15 per MTok as Sonnet 4.5).
  *
- * The pricing table in `pricing.ts` strips trailing `-YYYYMMDD` snapshots
- * and falls back to the family alias, so the dated pin doesn't require
- * a pricing-table edit. (Sonnet 4.5 and 4.6 share rates as of P4r-7.)
+ * Caveat to re-validate after the upgrade lands (CLAUDE.md §7a P4r-7
+ * historical note): the prior P4r-6 brain-eval observed the 4.6 alias
+ * silently disabled prompt caching (cache_create=0 / cache_read=0
+ * on prefixes well above the 1024-token Sonnet minimum). That
+ * observation may be stale — re-run `npm run probe:cache` after this
+ * lands. If caching still doesn't fire, we either accept the cost
+ * (~47% higher than 4.5 per the prior eval) or pin back to 4.5.
+ *
+ * Dated handles: a prior P4r-2 probe rejected `claude-sonnet-4-6-
+ * 20260217` (404 from /v1/messages). When a real dated snapshot
+ * becomes available, override via ANTHROPIC_MODEL env or update the
+ * default here — the pricing table already strips trailing dates and
+ * falls back to the `claude-sonnet-4-6` family entry, so no pricing
+ * edit needed.
  */
 
-export const ANTHROPIC_MODEL_DEFAULT = "claude-sonnet-4-5-20250929";
+export const ANTHROPIC_MODEL_DEFAULT = "claude-sonnet-4-6";
 
 export const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 

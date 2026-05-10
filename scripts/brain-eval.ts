@@ -8,18 +8,18 @@
  * vs Sonnet 4.5 empirically before committing to a model pin.
  *
  * Usage:
- *   npm run brain:eval                          # default Sonnet 4.6
- *   npm run brain:eval -- --model claude-sonnet-4-5
- *   npm run brain:eval -- --markdown            # also write markdown
- *   npm run brain:eval -- --no-prompt           # skip cost-confirm
- *   npm run brain:eval -- --no-baseline-diff    # skip baseline compare
+ *   npm run brain:eval                                 # default (current pin: Sonnet 4.6)
+ *   npm run brain:eval -- --model claude-sonnet-4-5-20250929
+ *   npm run brain:eval -- --markdown                   # also write markdown
+ *   npm run brain:eval -- --no-prompt                  # skip cost-confirm
+ *   npm run brain:eval -- --no-baseline-diff           # skip baseline compare
  *
  * Output:
  *   eval/reports/{ts}-{model}.json   structured per-row results
  *   eval/reports/{ts}-{model}.md     (when --markdown is set)
  *   stdout: live progress per row + summary
  *
- * Cost: ~$0.05–0.10/run (11 rows × ~$0.005-0.010 each at Sonnet rates).
+ * Cost: ~$0.05–0.10/run (13 rows × ~$0.005-0.010 each at Sonnet rates).
  * Cost-confirmation prompt fires at script start unless --no-prompt.
  */
 

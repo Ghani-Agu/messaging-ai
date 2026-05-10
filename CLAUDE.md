@@ -376,6 +376,14 @@ Deferred to a later phase (originally part of Phase 4):
 
 Phase 4 resumption acceptance (when P4r-6 completes): widget chat through `/api/widget/messages` returns real Claude replies, streams token-by-token, includes correct citations + escalation + confidence, prompt caching produces measurable cost savings on the second turn of any conversation, and `npm run brain:eval` passes the 11-row bank.
 
+P4r-8 — **Re-upgrade Sonnet 4.5 → Sonnet 4.6.** Model pin reverted to `claude-sonnet-4-6` (dateless alias) for modestly better instruction-following + source-information accuracy per Anthropic's published benchmarks. Same pricing ($3/$15 per MTok); pricing table already had the 4.6 entry from P4r-3. Single constant updated in `src/server/ai/anthropic-config.ts`; no code structural changes. Unit test `anthropic-config.test.ts` re-pinned to the new ID.
+
+**Caching trade-off to re-validate after this lands.** The P4r-6 brain-eval found that the 4.6 alias silently disabled prompt caching (`cache_create=0`/`cache_read=0` on prefixes well above the 1024-token Sonnet minimum) — the reason we moved to 4.5 in P4r-7. That observation may be stale by Feb 2026. Re-run `npm run probe:cache` after the upgrade. If caching still doesn't fire, the choice is either accept the ~47% higher per-call cost (per P4r-7's eval) or revert the pin to `claude-sonnet-4-5-20250929`. The `[brain-cache-warn]` log line surfaces the failure mode in prod traffic without a probe run.
+
+**Dated snapshot status.** P4r-2 previously probed `claude-sonnet-4-6-20260217` and got 404 from `/v1/messages`. The dateless alias is the only documented form for Sonnet 4.6 at this writing. When a real dated snapshot becomes available, override via `ANTHROPIC_MODEL` env var (preferred for staged rollout) or update `ANTHROPIC_MODEL_DEFAULT` in `anthropic-config.ts` — pricing-table edit is NOT needed (the `-YYYYMMDD$` strip in `pricing.ts:getPricing` already falls back to the `claude-sonnet-4-6` family entry).
+
+**MASTER_PLAN §3 stale reference.** `MASTER_PLAN.md:101` still names "Claude Sonnet 4.5" + the dated 4.5 snapshot. Update with project-lead approval per CLAUDE.md §1 — not touched here.
+
 ### Architectural rules established in Phase 4 partial
 
 - **Tool-use is the contract for AI replies.** The brain must always go through the `send_reply` tool — never free text. Every conformant `ClaudeClient` implementation enforces this on the way out.
