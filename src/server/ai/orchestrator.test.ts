@@ -97,7 +97,7 @@ beforeEach(() => {
     sampleChunk(1),
     sampleChunk(2),
   ]);
-  vi.mocked(retrieveItems).mockResolvedValue([]);
+  vi.mocked(retrieveItems).mockResolvedValue({ items: [], brandSummaries: [] });
   vi.mocked(retrieveQnaMatches).mockResolvedValue([]);
   // Default: no operational facts (pre-Phase-8 tenant). Specific tests
   // override per-call to inject tier-1 / tier-2 envelopes.

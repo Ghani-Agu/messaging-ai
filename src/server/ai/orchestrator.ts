@@ -430,10 +430,12 @@ async function prepareCallContext(input: BrainInput): Promise<CallContext> {
     topK: TOP_K_QNA,
   });
 
-  const [retrievedItems, retrievedQna] = await Promise.all([
+  const [itemResult, retrievedQna] = await Promise.all([
     itemRetrieval,
     qnaRetrieval,
   ]);
+  const retrievedItems = itemResult.items;
+  const brandSummaries = itemResult.brandSummaries;
 
   const chunkTopK =
     retrievedItems.length > 0 ? TOP_K_CHUNKS_WITH_ITEMS : TOP_K_CHUNKS_NO_ITEMS;
@@ -566,6 +568,7 @@ async function prepareCallContext(input: BrainInput): Promise<CallContext> {
     citations: renderedCitations,
     history,
     message: trimmedMessage,
+    brandSummaries,
   });
 
   // Token-budget guard with the actual cl100k tokenizer.

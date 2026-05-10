@@ -25,7 +25,11 @@ const tokens = (s: string) => enc.encode(s).length;
 // Bumped 1400 → 1500 for the CONTACT INFO citation-kind bullet:
 // telling the model to list ALL contacts on escalation and to ignore
 // them on normal answers. ~79 tokens added; measured ~1456.
-const BLOCK_A_BUDGET = 1500;
+// Bumped 1500 → 1650 for the BRAND SUMMARY citation-kind bullet:
+// teaches the model to read aggregate [BRAND SUMMARY] lines at the top
+// of CITATIONS for brand-frequency questions instead of listing every
+// SKU. ~145 tokens added; measured ~1601.
+const BLOCK_A_BUDGET = 1650;
 
 describe("Block A — platform rules", () => {
   it("stays under the token budget", () => {
@@ -250,6 +254,62 @@ describe("buildBlockA / buildBlockB / buildBlockC", () => {
     // Reserved _-prefix keys must NOT leak into the prompt.
     expect(c).not.toContain("_template_id");
     expect(c).not.toContain("laptop");
+  });
+
+  it("buildBlockC prepends [BRAND SUMMARY] lines before [N] citations", () => {
+    const c = buildBlockC({
+      citations: [
+        {
+          kind: "item" as const,
+          name: "Ajax Hub Plus",
+          brand: "Ajax",
+          sku: null,
+          currency: "DZD",
+          priceCents: 50_000,
+          availability: "IN_STOCK" as const,
+        },
+      ],
+      history: [],
+      message: "ajax?",
+      brandSummaries: [
+        { brand: "Ajax", total: 11, inStock: 6, outOfStock: 5 },
+      ],
+    });
+    expect(c).toContain("[BRAND SUMMARY] Ajax — 11 products: 6 in stock, 5 out of stock");
+    // BRAND SUMMARY line precedes the first numbered citation.
+    expect(c.indexOf("[BRAND SUMMARY]")).toBeLessThan(c.indexOf("[1] STRUCTURED ITEM"));
+  });
+
+  it("buildBlockC omits BRAND SUMMARY block when summaries is empty/undefined", () => {
+    const c = buildBlockC({
+      citations: [],
+      history: [],
+      message: "hi",
+    });
+    expect(c).not.toContain("[BRAND SUMMARY]");
+  });
+
+  it("BRAND SUMMARY pluralises singular product counts", () => {
+    const c = buildBlockC({
+      citations: [],
+      history: [],
+      message: "?",
+      brandSummaries: [{ brand: "Hikvision", total: 1, inStock: 1, outOfStock: 0 }],
+    });
+    expect(c).toContain("[BRAND SUMMARY] Hikvision — 1 product: 1 in stock");
+  });
+
+  it("BRAND SUMMARY drops the stock breakdown when both counts are zero", () => {
+    const c = buildBlockC({
+      citations: [],
+      history: [],
+      message: "?",
+      brandSummaries: [{ brand: "Ubiquiti", total: 3, inStock: 0, outOfStock: 0 }],
+    });
+    // No availability data → just the product count, no ": N in stock, M out".
+    expect(c).toContain("[BRAND SUMMARY] Ubiquiti — 3 products");
+    expect(c).not.toContain("0 in stock");
+    expect(c).not.toContain("0 out of stock");
   });
 
   it("buildBlockC renders Q&A citations with the USE NEAR-VERBATIM tag", () => {

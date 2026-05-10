@@ -384,6 +384,55 @@ export async function lexicalSearchItems(args: {
   `;
 }
 
+/**
+ * Substring/keyword search — SQL ILIKE on name + brand. Mirrors the
+ * operator-side product search bar's behavior: when the customer asks
+ * "wsh 3andkom Ajax?", retrieval should surface AJAX-named items the
+ * same way the operator's "ajax" search returns them, even when the
+ * vector embedding signal is weak for sparse-text catalog entries.
+ *
+ * Each call matches a single token. The orchestrator splits the
+ * customer message into significant tokens (see extractSignificantTokens
+ * in retriever.ts) and unions per-token results. Scoring is fixed: brand
+ * matches outrank name matches (the operator-curated brand column is
+ * higher-precision than free-form name substrings).
+ *
+ * Returns up to `limit` rows; the call site typically passes 30. Items
+ * with no brand are still searchable via name.
+ */
+export async function keywordSearchItems(args: {
+  tenantId: string;
+  token: string;
+  limit: number;
+}): Promise<RawItemHit[]> {
+  const pattern = `%${args.token}%`;
+  return prisma.$queryRaw<RawItemHit[]>`
+    SELECT i."id"          AS "itemId",
+           i."name"        AS "name",
+           i."category"    AS "category",
+           i."brand"       AS "brand",
+           i."sku"         AS "sku",
+           i."currency"    AS "currency",
+           i."priceCents"  AS "priceCents",
+           i."availability" AS "availability",
+           i."description" AS "description",
+           i."specs"       AS "specs",
+           CASE
+             WHEN i."brand" ILIKE ${pattern} THEN 2.0
+             WHEN i."name"  ILIKE ${pattern} THEN 1.0
+             ELSE 0.0
+           END AS "score"
+      FROM "KnowledgeItem" i
+     WHERE i."tenantId" = ${args.tenantId}
+       AND (
+         i."brand" ILIKE ${pattern}
+         OR i."name" ILIKE ${pattern}
+       )
+     ORDER BY "score" DESC, i."name" ASC
+     LIMIT ${args.limit}
+  `;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Verification (operator-asserted "still correct")
 // ─────────────────────────────────────────────────────────────────────────────

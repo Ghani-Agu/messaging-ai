@@ -17,17 +17,16 @@ import type {
  * every tenant, Block B is identical within a tenant. Block C (the
  * per-request runtime block) lives on the user turn, not here.
  *
- * Block A target: ≤ 1500 input tokens (asserted by the unit test).
+ * Block A target: ≤ 1650 input tokens (asserted by the unit test).
  * Block A measured: 594 tokens (Phase 4 initial); briefly 794 during
  * the P4r-3 schema-split attempt; 738 after revert; ~1119 after the
  * P4r-7 Algerian-Darija coaching; ~1377 after the forbidden-Moroccan
- * + French-fallback additions; ~1456 after the CONTACT INFO bullet
- * (operator-managed escalation contacts). The added tokens are
- * load-bearing: forbidden-Moroccan keeps the register clean for
- * Algerian customers; CONTACT INFO routes human handoff to the
- * tenant's curated phone/email list instead of "contact us" dead
- * ends. Never broaden the LANGUAGE HANDLING section to "Maghrebi
- * Darija" — the platform serves Algerian businesses specifically.
+ * + French-fallback additions; ~1456 after the CONTACT INFO bullet;
+ * ~1601 after the BRAND SUMMARY bullet (catalog-frequency answers for
+ * "3andkom Ajax?"-style questions). Each addition is load-bearing for
+ * a customer-facing failure mode the prior eval hit. Never broaden
+ * the LANGUAGE HANDLING section to "Maghrebi Darija" — the platform
+ * serves Algerian businesses specifically.
  *
  * Pure functions — no I/O, no globals, easy to unit-test.
  */
@@ -66,6 +65,7 @@ CITATION KINDS
 - When a citation is tagged Q&A (USE NEAR-VERBATIM), use its answer text directly. Only adapt for the customer's language and register — do not paraphrase or summarize the answer.
 - OPERATIONAL FACTS (hours, locations, etc.) are authoritative for the field they describe; treat as ground truth.
 - CONTACT INFO entries are the operator-curated human-handoff list. Do NOT mention them in normal answers — only when you need to escalate to a human (see ESCALATION below). When you do escalate, list ALL available CONTACT INFO entries so the customer can pick whichever fits their need (phone, email, by role). Track the citation indices you list in citations_used.
+- [BRAND SUMMARY] lines (when present, at the top of CITATIONS) give catalog-wide counts for a brand the customer is asking about: total products + in-stock / out-of-stock breakdown. When the customer asks about a brand or product family ("3andkom Ajax?", "Quels Dahua avez-vous ?"), USE these counts to give a high-level answer ("we have 11 Ajax products, 6 in stock") and then mention the most relevant 2-3 specific products from the [N] STRUCTURED ITEM citations. Do not list every single product. Brand summaries are NOT numbered citations — do not put them in citations_used; cite the underlying [N] STRUCTURED ITEM rows instead.
 
 LANGUAGE HANDLING
 - Mirror the customer's language precisely. Match their script choice: Arabic-script in → Arabic-script out; Latin/Arabizi in → Latin/Arabizi out. Do not switch the customer's language unless they ask.
@@ -443,15 +443,50 @@ function renderLocations(locs: OperationalFactsLocation[]): string {
   }).join("; ");
 }
 
+/**
+ * Aggregate "the catalog has N <brand> products, X in stock, Y out" line
+ * rendered at the top of CITATIONS in Block C. Lets the brain answer
+ * brand-frequency questions ("3andkom Ajax?") quantitatively without
+ * having to list every individual SKU. Computed in the orchestrator
+ * from the keyword search pool (NOT just the top-K cited items, so the
+ * counts reflect the wider candidate set the customer is implicitly
+ * asking about).
+ */
+export type BrandSummary = {
+  brand: string;
+  total: number;
+  inStock: number;
+  outOfStock: number;
+};
+
+function renderBrandSummary(s: BrandSummary): string {
+  const productsLabel = `${s.total} ${s.total === 1 ? "product" : "products"}`;
+  const parts: string[] = [productsLabel];
+  if (s.inStock > 0 || s.outOfStock > 0) {
+    const stockBits: string[] = [];
+    if (s.inStock > 0) stockBits.push(`${s.inStock} in stock`);
+    if (s.outOfStock > 0) stockBits.push(`${s.outOfStock} out of stock`);
+    parts.push(stockBits.join(", "));
+  }
+  return `[BRAND SUMMARY] ${s.brand} — ${parts.join(": ")}`;
+}
+
 export function buildBlockC(args: {
   citations: RenderedCitation[];
   history: HistoryTurn[];
   message: string;
+  /** Optional brand aggregate header lines rendered before the [N] citations. */
+  brandSummaries?: BrandSummary[];
 }): string {
-  const { citations, history, message } = args;
+  const { citations, history, message, brandSummaries } = args;
   const sections: string[] = [];
 
   sections.push("CITATIONS");
+  if (brandSummaries && brandSummaries.length > 0) {
+    for (const s of brandSummaries) {
+      sections.push(renderBrandSummary(s));
+    }
+  }
   if (citations.length === 0) {
     sections.push("(none — knowledge base did not return any relevant chunks)");
   } else {
@@ -492,6 +527,8 @@ export function buildPrompt(args: {
   citations: RenderedCitation[];
   history: HistoryTurn[];
   message: string;
+  /** Brand aggregate counts prepended to the CITATIONS section. Empty / undefined = no header lines. */
+  brandSummaries?: BrandSummary[];
 }): { system: SystemBlock[]; userMessage: string } {
   return {
     system: [
@@ -506,6 +543,7 @@ export function buildPrompt(args: {
       citations: args.citations,
       history: args.history,
       message: args.message,
+      brandSummaries: args.brandSummaries,
     }),
   };
 }
