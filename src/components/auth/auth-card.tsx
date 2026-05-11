@@ -15,7 +15,6 @@ import {
   type EmailSignInState,
   type PasswordSignInState,
 } from "@/server/auth/actions";
-import { cn } from "@/lib/utils";
 import { easeOutExpo, durationMedium } from "@/lib/motion";
 
 type AuthMode = "login" | "signup";
@@ -23,7 +22,6 @@ type AuthMode = "login" | "signup";
 const COPY: Record<AuthMode, {
   titlePrefix: string;
   subtitle: string;
-  cta: string;
   switchPrompt: string;
   switchHref: string;
   switchLabel: string;
@@ -31,7 +29,6 @@ const COPY: Record<AuthMode, {
   login: {
     titlePrefix: "Sign in to ",
     subtitle: "Sign in to your WBP AI workspace.",
-    cta: "Email me a magic link",
     switchPrompt: "New to WBP AI?",
     switchHref: "/signup",
     switchLabel: "Create an account",
@@ -39,7 +36,6 @@ const COPY: Record<AuthMode, {
   signup: {
     titlePrefix: "Get started with ",
     subtitle: "Start replying to customers in 5 minutes.",
-    cta: "Email me a magic link",
     switchPrompt: "Already have a WBP AI workspace?",
     switchHref: "/login",
     switchLabel: "Sign in",
@@ -51,8 +47,6 @@ const initialPasswordState: PasswordSignInState = { status: "idle" };
 
 const DEFAULT_EYEBROW = "Secure access";
 
-type LoginMethod = "magic-link" | "password";
-
 export function AuthCard({
   mode,
   eyebrow = DEFAULT_EYEBROW,
@@ -61,16 +55,15 @@ export function AuthCard({
   eyebrow?: string;
 }) {
   const copy = COPY[mode];
+  // Signup keeps the magic-link path (no password sign-up flow exists —
+  // accounts created via Google + invitations set their first password via
+  // /reset-password). Login is password-only; the previous Magic link /
+  // Password tab toggle was removed.
   const [state, formAction, pending] = useActionState(signInWithEmail, initialState);
   const [pwState, pwFormAction, pwPending] = useActionState(
     signInWithPassword,
     initialPasswordState,
   );
-  // Signup is magic-link / Google only — password sign-up doesn't exist
-  // yet (existing accounts set their first password via the reset flow).
-  // The method-toggle only renders for login mode.
-  const [method, setMethod] = useState<LoginMethod>("magic-link");
-  const showPasswordPath = mode === "login" && method === "password";
 
   return (
     <motion.div
@@ -129,23 +122,6 @@ export function AuthCard({
         </div>
 
         {mode === "login" ? (
-          <div className="mb-4 grid grid-cols-2 gap-2" role="tablist" aria-label="Sign-in method">
-            <MethodTab
-              active={method === "magic-link"}
-              onClick={() => setMethod("magic-link")}
-            >
-              Magic link
-            </MethodTab>
-            <MethodTab
-              active={method === "password"}
-              onClick={() => setMethod("password")}
-            >
-              Password
-            </MethodTab>
-          </div>
-        ) : null}
-
-        {showPasswordPath ? (
           <form action={pwFormAction} className="space-y-3" noValidate>
             <label className="block">
               <span className="mb-1.5 block text-body-sm text-[var(--text-secondary)]">
@@ -232,7 +208,7 @@ export function AuthCard({
                   Sending…
                 </>
               ) : (
-                copy.cta
+                "Email me a magic link"
               )}
             </MagneticButton>
           </form>
@@ -253,41 +229,6 @@ export function AuthCard({
         By continuing you agree to the terms of service and privacy policy.
       </p>
     </motion.div>
-  );
-}
-
-/**
- * Two-up segmented tab for picking sign-in method (magic link vs
- * password). Visually mirrors the language pills on the playground
- * — same role="tab" + aria-selected pattern.
- */
-function MethodTab({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={cn(
-        "inline-flex h-9 items-center justify-center rounded-md px-3 text-body-sm font-medium",
-        "transition-[background-color,color,border-color] duration-150 ease-out",
-        "border",
-        active
-          ? "border-[color-mix(in_oklab,var(--accent-base)_40%,transparent)] bg-[color-mix(in_oklab,var(--accent-base)_15%,transparent)] text-[var(--text-primary)]"
-          : "border-[var(--border-subtle)] bg-transparent text-[var(--text-secondary)] hover:border-[var(--border-default)] hover:text-[var(--text-primary)]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-surface)]",
-      )}
-    >
-      {children}
-    </button>
   );
 }
 
