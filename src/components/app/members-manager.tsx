@@ -1,12 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
-import { Check, Loader2, Mail, MoreVertical, RotateCw, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  Check,
+  Loader2,
+  Mail,
+  MoreVertical,
+  Pencil,
+  RotateCw,
+  Trash2,
+  X,
+} from "lucide-react";
 import type { InvitationStatus, Role } from "@prisma/client";
 import {
   PERMISSION_GROUPS,
   ROLE_PRESETS,
-  labelForPermission,
+  isPermissionSlug,
   type PermissionSlug,
 } from "@/lib/permissions";
 import {
@@ -382,7 +391,21 @@ function InviteModal({
   }
 
   return (
-    <ModalShell title="Invite a teammate" onClose={onClose}>
+    <ModalShell
+      title="Invite a teammate"
+      onClose={onClose}
+      footer={
+        <ModalActions
+          error={error}
+          onCancel={onClose}
+          onSubmit={submit}
+          pending={pending}
+          submitDisabled={!email}
+          submitLabel="Send invitation"
+          pendingLabel="Sending…"
+        />
+      }
+    >
       <div className="space-y-4">
         <Field label="Email">
           <input
@@ -425,36 +448,6 @@ function InviteModal({
           onChange={setPermissions}
           disabled={pending}
         />
-        {error ? (
-          <p role="alert" className="text-body-sm text-[var(--danger)]">
-            {error}
-          </p>
-        ) : null}
-        <div className="flex justify-end gap-2 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={pending}
-            className="inline-flex h-9 items-center rounded-md border border-[var(--border-subtle)] bg-transparent px-4 text-body-sm font-medium text-[var(--text-secondary)] hover:border-[var(--border-default)]"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={pending || !email}
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--accent-base)] px-4 text-body-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
-          >
-            {pending ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin" />
-                Sending…
-              </>
-            ) : (
-              "Send invitation"
-            )}
-          </button>
-        </div>
       </div>
     </ModalShell>
   );
@@ -473,9 +466,12 @@ function EditMemberModal({
 }) {
   const [role, setRole] = useState<Role>(member.role);
   const [permissions, setPermissions] = useState<PermissionSlug[]>(
-    member.permissions.filter((p): p is PermissionSlug =>
-      ROLE_PRESETS.OWNER.includes(p as PermissionSlug),
-    ),
+    // Filter the persisted strings down to known PermissionSlug values.
+    // Earlier revisions filtered against ROLE_PRESETS.OWNER.includes, which
+    // works accidentally only because OWNER's preset IS the full slug list —
+    // the intent is "drop unknown / deleted slugs," which `isPermissionSlug`
+    // expresses directly.
+    member.permissions.filter(isPermissionSlug),
   );
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -504,7 +500,20 @@ function EditMemberModal({
   }
 
   return (
-    <ModalShell title={`Edit ${member.name ?? member.email ?? "member"}`} onClose={onClose}>
+    <ModalShell
+      title={`Edit ${member.name ?? member.email ?? "member"}`}
+      onClose={onClose}
+      footer={
+        <ModalActions
+          error={error}
+          onCancel={onClose}
+          onSubmit={submit}
+          pending={pending}
+          submitLabel="Save changes"
+          pendingLabel="Saving…"
+        />
+      }
+    >
       <div className="space-y-4">
         <Field label="Role">
           <select
@@ -525,36 +534,6 @@ function EditMemberModal({
           onChange={setPermissions}
           disabled={pending}
         />
-        {error ? (
-          <p role="alert" className="text-body-sm text-[var(--danger)]">
-            {error}
-          </p>
-        ) : null}
-        <div className="flex justify-end gap-2 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={pending}
-            className="inline-flex h-9 items-center rounded-md border border-[var(--border-subtle)] bg-transparent px-4 text-body-sm font-medium text-[var(--text-secondary)] hover:border-[var(--border-default)]"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={pending}
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--accent-base)] px-4 text-body-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
-          >
-            {pending ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin" />
-                Saving…
-              </>
-            ) : (
-              "Save changes"
-            )}
-          </button>
-        </div>
       </div>
     </ModalShell>
   );
@@ -637,6 +616,86 @@ function RemoveMemberModal({
   );
 }
 
+/**
+ * Friendlier page labels for the paired view/edit rows. Each PERMISSION_SLUGS
+ * entry's prefix maps to a single human-readable page name; the row renders
+ * "Products" once with [View][Edit] toggles on the right rather than two
+ * separate "View products" / "Manage products" checkbox rows.
+ */
+const PAGE_LABELS: Record<string, string> = {
+  dashboard: "Dashboard",
+  conversations: "Conversations",
+  documents: "Documents",
+  products: "Products",
+  qna: "Q&A",
+  "business-info": "Business info",
+  "live-data": "Live-data sources",
+  "knowledge-gaps": "Knowledge gaps",
+  channels: "Channels",
+  playground: "Playground",
+  settings: "Settings",
+  contacts: "Contacts",
+  members: "Members",
+};
+
+function pageLabelForSlug(slug: PermissionSlug): string {
+  const page = slug.split(":")[0]!;
+  return PAGE_LABELS[page] ?? page;
+}
+
+type PermissionRowShape =
+  | {
+      kind: "pair";
+      label: string;
+      viewSlug: PermissionSlug;
+      editSlug: PermissionSlug;
+    }
+  | {
+      kind: "solo";
+      label: string;
+      slug: PermissionSlug;
+      action: "view" | "edit";
+    };
+
+/**
+ * Walk the group's slugs and collapse adjacent view/edit pairs onto one row.
+ * Solo slugs (e.g. dashboard:view, playground:view, members:edit when
+ * `members:view` isn't in the same preset) render on their own.
+ */
+function buildPermissionRows(
+  slugs: readonly PermissionSlug[],
+): PermissionRowShape[] {
+  const slugSet = new Set<string>(slugs);
+  const seen = new Set<string>();
+  const rows: PermissionRowShape[] = [];
+  for (const slug of slugs) {
+    if (seen.has(slug)) continue;
+    const [page, action] = slug.split(":");
+    if (action === "view" && page) {
+      const editSlug = `${page}:edit` as PermissionSlug;
+      if (slugSet.has(editSlug)) {
+        rows.push({
+          kind: "pair",
+          label: pageLabelForSlug(slug),
+          viewSlug: slug,
+          editSlug,
+        });
+        seen.add(slug);
+        seen.add(editSlug);
+        continue;
+      }
+    }
+    rows.push({
+      kind: "solo",
+      label: pageLabelForSlug(slug),
+      slug,
+      action: action === "edit" ? "edit" : "view",
+    });
+    seen.add(slug);
+  }
+  return rows;
+}
+
 function PermissionsPicker({
   role,
   permissions,
@@ -649,23 +708,70 @@ function PermissionsPicker({
   disabled: boolean;
 }) {
   const set = useMemo(() => new Set(permissions), [permissions]);
+  const preset = ROLE_PRESETS[role];
+  const presetSet = useMemo(() => new Set(preset), [preset]);
 
-  function toggle(slug: PermissionSlug, on: boolean): void {
+  // Count slugs that diverge from the role preset in either direction:
+  // user added one not in the preset, or removed one that the preset
+  // would have granted. Total = both buckets summed.
+  const customizationCount = useMemo(() => {
+    let count = 0;
+    for (const slug of set) if (!presetSet.has(slug)) count += 1;
+    for (const slug of presetSet) if (!set.has(slug)) count += 1;
+    return count;
+  }, [set, presetSet]);
+
+  function resetToPreset(): void {
+    onChange([...preset]);
+  }
+
+  /**
+   * Toggling the view pill enforces the invariant `edit implies view`:
+   * turning view OFF cascades the edit slug off too (you can't edit what
+   * you can't see). Turning view ON has no edit-side effect.
+   */
+  function toggleView(
+    viewSlug: PermissionSlug,
+    editSlug: PermissionSlug | null,
+    on: boolean,
+  ): void {
+    const next = new Set(set);
+    if (on) {
+      next.add(viewSlug);
+    } else {
+      next.delete(viewSlug);
+      if (editSlug) next.delete(editSlug);
+    }
+    onChange([...next]);
+  }
+
+  /**
+   * Toggling the edit pill: ON auto-ticks view (edit implies view); OFF
+   * just clears edit.
+   */
+  function toggleEdit(
+    viewSlug: PermissionSlug,
+    editSlug: PermissionSlug,
+    on: boolean,
+  ): void {
+    const next = new Set(set);
+    if (on) {
+      next.add(viewSlug);
+      next.add(editSlug);
+    } else {
+      next.delete(editSlug);
+    }
+    onChange([...next]);
+  }
+
+  function toggleSolo(slug: PermissionSlug, on: boolean): void {
     const next = new Set(set);
     if (on) next.add(slug);
     else next.delete(slug);
     onChange([...next]);
   }
 
-  function resetToPreset(): void {
-    onChange([...ROLE_PRESETS[role]]);
-  }
-
-  const presetMatches =
-    permissions.length === ROLE_PRESETS[role].length &&
-    ROLE_PRESETS[role].every((s) => set.has(s));
-
-  // OWNER gets everything — no need to render togglable checkboxes.
+  // OWNER gets everything regardless — no togglable surface to render.
   if (role === "OWNER") {
     return (
       <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-3 text-body-sm text-[var(--text-secondary)]">
@@ -676,15 +782,13 @@ function PermissionsPicker({
   }
 
   return (
-    <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-4">
-      <div className="flex items-center justify-between">
-        <p className="text-body-sm font-medium text-[var(--text-primary)]">
-          Page permissions
-        </p>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <PresetStatus customizations={customizationCount} role={role} />
         <button
           type="button"
           onClick={resetToPreset}
-          disabled={disabled || presetMatches}
+          disabled={disabled || customizationCount === 0}
           className="text-caption font-medium text-[var(--accent-hover)] hover:underline disabled:cursor-not-allowed disabled:text-[var(--text-tertiary)] disabled:no-underline"
         >
           Reset to {role.toLowerCase()} defaults
@@ -692,29 +796,210 @@ function PermissionsPicker({
       </div>
       <div className="space-y-3">
         {PERMISSION_GROUPS.map((group) => (
-          <div key={group.label}>
-            <p className="mb-1.5 text-caption uppercase tracking-wider text-[var(--text-tertiary)]">
-              {group.label}
-            </p>
-            <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
-              {group.slugs.map((slug) => (
-                <label
-                  key={slug}
-                  className="flex items-center gap-2 rounded px-1.5 py-1 text-body-sm text-[var(--text-secondary)] hover:bg-[var(--bg-surface)]"
-                >
-                  <input
-                    type="checkbox"
-                    checked={set.has(slug)}
-                    onChange={(e) => toggle(slug, e.target.checked)}
-                    disabled={disabled}
-                    className="size-4 rounded border-[var(--border-default)] accent-[var(--accent-base)]"
-                  />
-                  <span>{labelForPermission(slug)}</span>
-                </label>
-              ))}
-            </div>
-          </div>
+          <PermissionsGroupCard
+            key={group.label}
+            label={group.label}
+            slugs={group.slugs}
+            set={set}
+            disabled={disabled}
+            onToggleView={toggleView}
+            onToggleEdit={toggleEdit}
+            onToggleSolo={toggleSolo}
+          />
         ))}
+      </div>
+    </div>
+  );
+}
+
+function PresetStatus({
+  customizations,
+  role,
+}: {
+  customizations: number;
+  role: Role;
+}) {
+  if (customizations === 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] px-2.5 py-1 text-caption text-[var(--text-secondary)]">
+        <Check className="size-3" aria-hidden />
+        Matches {role.toLowerCase()} preset
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-[color-mix(in_oklab,var(--accent-base)_30%,transparent)] bg-[color-mix(in_oklab,var(--accent-base)_12%,transparent)] px-2.5 py-1 text-caption text-[var(--accent-hover)]">
+      <Pencil className="size-3" aria-hidden />
+      Customized · {customizations}{" "}
+      {customizations === 1 ? "change" : "changes"} from {role.toLowerCase()}{" "}
+      preset
+    </span>
+  );
+}
+
+function PermissionsGroupCard({
+  label,
+  slugs,
+  set,
+  disabled,
+  onToggleView,
+  onToggleEdit,
+  onToggleSolo,
+}: {
+  label: string;
+  slugs: readonly PermissionSlug[];
+  set: Set<PermissionSlug>;
+  disabled: boolean;
+  onToggleView: (
+    viewSlug: PermissionSlug,
+    editSlug: PermissionSlug | null,
+    on: boolean,
+  ) => void;
+  onToggleEdit: (
+    viewSlug: PermissionSlug,
+    editSlug: PermissionSlug,
+    on: boolean,
+  ) => void;
+  onToggleSolo: (slug: PermissionSlug, on: boolean) => void;
+}) {
+  const rows = useMemo(() => buildPermissionRows(slugs), [slugs]);
+  return (
+    <div className="overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)]">
+      <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-2">
+        <p className="text-caption font-medium uppercase tracking-wider text-[var(--text-tertiary)]">
+          {label}
+        </p>
+      </div>
+      <ul role="list" className="divide-y divide-[var(--border-subtle)]">
+        {rows.map((row) => (
+          <li
+            key={row.kind === "pair" ? row.viewSlug : row.slug}
+            className="flex items-center justify-between gap-3 px-3 py-2"
+          >
+            <span className="text-body-sm text-[var(--text-primary)]">
+              {row.label}
+            </span>
+            {row.kind === "pair" ? (
+              <div className="flex items-center gap-1.5">
+                <PermissionToggle
+                  label="View"
+                  checked={set.has(row.viewSlug)}
+                  disabled={disabled}
+                  onChange={(on) => onToggleView(row.viewSlug, row.editSlug, on)}
+                />
+                <PermissionToggle
+                  label="Edit"
+                  checked={set.has(row.editSlug)}
+                  disabled={disabled}
+                  onChange={(on) => onToggleEdit(row.viewSlug, row.editSlug, on)}
+                />
+              </div>
+            ) : (
+              <PermissionToggle
+                label={row.action === "edit" ? "Edit" : "View"}
+                checked={set.has(row.slug)}
+                disabled={disabled}
+                onChange={(on) => onToggleSolo(row.slug, on)}
+              />
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Two-state pill. role="switch" so screen readers announce on/off; visual
+ * style mirrors the playground's segmented radio group + the AI Behavior
+ * toggles (existing app vocabulary, not a bespoke control).
+ */
+function PermissionToggle({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "inline-flex h-7 min-w-[3.25rem] items-center justify-center rounded-md border px-2 text-caption font-medium transition-colors duration-150 ease-out",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-surface-elevated)]",
+        checked
+          ? "border-[color-mix(in_oklab,var(--accent-base)_40%,transparent)] bg-[color-mix(in_oklab,var(--accent-base)_15%,transparent)] text-[var(--accent-hover)]"
+          : "border-[var(--border-subtle)] bg-transparent text-[var(--text-tertiary)] hover:border-[var(--border-default)] hover:text-[var(--text-secondary)]",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+/**
+ * Shared footer body for the invite + edit modals. Renders the error message
+ * (if any) inside the sticky footer so it stays visible even when the body
+ * is scrolled, then the Cancel + primary action buttons.
+ */
+function ModalActions({
+  error,
+  onCancel,
+  onSubmit,
+  pending,
+  submitDisabled,
+  submitLabel,
+  pendingLabel,
+}: {
+  error: string | null;
+  onCancel: () => void;
+  onSubmit: () => void;
+  pending: boolean;
+  submitDisabled?: boolean;
+  submitLabel: string;
+  pendingLabel: string;
+}) {
+  return (
+    <div className="space-y-3">
+      {error ? (
+        <p role="alert" className="text-body-sm text-[var(--danger)]">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={pending}
+          className="inline-flex h-9 items-center rounded-md border border-[var(--border-subtle)] bg-transparent px-4 text-body-sm font-medium text-[var(--text-secondary)] hover:border-[var(--border-default)] disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={pending || submitDisabled}
+          className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--accent-base)] px-4 text-body-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
+        >
+          {pending ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              {pendingLabel}
+            </>
+          ) : (
+            submitLabel
+          )}
+        </button>
       </div>
     </div>
   );
@@ -741,11 +1026,27 @@ function ModalShell({
   title,
   onClose,
   children,
+  footer,
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
+  /**
+   * Optional sticky footer. When provided, renders below a bordered
+   * separator at the bottom of the modal and stays always visible
+   * regardless of body scroll. Pass action buttons (Cancel / Save) here
+   * so they're never clipped on tall content.
+   */
+  footer?: React.ReactNode;
 }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Scroll affordance — top + bottom gradient fades that appear when the
+  // body has more content above / below the visible region. Recalculated
+  // on scroll + on body resize (which catches role changes that swap
+  // PermissionsPicker between full-grid and OWNER-notice).
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const [canScrollDown, setCanScrollDown] = useState(false);
+
   // Close on Escape.
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
@@ -754,6 +1055,43 @@ function ModalShell({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    function update(): void {
+      const node = scrollRef.current;
+      if (!node) return;
+      setCanScrollUp(node.scrollTop > 4);
+      setCanScrollDown(
+        node.scrollTop + node.clientHeight < node.scrollHeight - 4,
+      );
+    }
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    // Observing the immediate child catches inner-content resizes too
+    // (e.g., role swap toggling the picker height).
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => {
+      el.removeEventListener("scroll", update);
+      ro.disconnect();
+    };
+  }, []);
+
+  // Inset shadows on the scroll container — visual signal that content
+  // is clipped above (top) and/or below (bottom). Composed inline so the
+  // conditional joining stays a single CSS `box-shadow` value (multiple
+  // shadows comma-separated). transition-shadow on the element gives a
+  // soft fade-in/out when the scroll state flips.
+  const innerShadow =
+    [
+      canScrollUp ? "inset 0 14px 14px -14px rgba(0, 0, 0, 0.5)" : null,
+      canScrollDown ? "inset 0 -14px 14px -14px rgba(0, 0, 0, 0.5)" : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
 
   return (
     <div
@@ -764,10 +1102,11 @@ function ModalShell({
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-[var(--shadow-lg)]"
+        className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-[var(--shadow-lg)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-start justify-between gap-4">
+        {/* Sticky header */}
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--border-subtle)] px-6 py-4">
           <h2 className="text-h4 text-[var(--text-primary)]">{title}</h2>
           <button
             type="button"
@@ -775,11 +1114,33 @@ function ModalShell({
             aria-label="Close"
             className="inline-flex size-7 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-surface-elevated)] hover:text-[var(--text-primary)]"
           >
-            <Check className="hidden" />
             <X className="size-4" />
           </button>
         </div>
-        {children}
+        {/* Scrollable body. `flex-auto` (not `flex-1`) gives this child a
+            content-based flex-basis so the panel's natural main-size sees
+            the real body height and the max-h-[90vh] cap actually engages.
+            `flex-1` (= flex: 1 1 0%) would invisibly collapse the body to
+            0 inside an auto-height column container — the bug this fix
+            replaces. `min-h-0` keeps the flex item shrinkable below
+            content; `overflow-y-auto` resolves the same min-height
+            implicitly per spec, but the explicit class is defense-in-
+            depth. The inset box-shadow is the scroll affordance — fades
+            in at top / bottom only when there's clipped content in that
+            direction. */}
+        <div
+          ref={scrollRef}
+          className="min-h-0 flex-auto overflow-y-auto px-6 py-4 transition-shadow duration-150"
+          style={innerShadow ? { boxShadow: innerShadow } : undefined}
+        >
+          {children}
+        </div>
+        {/* Sticky footer */}
+        {footer ? (
+          <div className="shrink-0 border-t border-[var(--border-subtle)] px-6 py-4">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>
   );
