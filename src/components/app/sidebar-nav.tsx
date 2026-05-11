@@ -37,14 +37,23 @@ type NavItem = {
   permission: PermissionSlug;
 };
 
-// Order: most-used → least-used. Phase 8 added "Business Info" (Operational
-// Facts) as a top-level entry per Gate-1 K8 override (flat sidebar — these
-// are daily operator actions and deserve top-level visibility, not nesting
-// under "Knowledge"). Placed alongside Knowledge so the two
-// knowledge-shaped surfaces sit together.
+// Order: daily ops → knowledge → config.
+//
+// 1. Daily ops (Dashboard, Conversations, Contacts, Playground) — what an
+//    operator touches on a typical day: monitoring + customer lookup + AI
+//    testing.
+// 2. Knowledge cluster (Documents → Products → Q&A → Business Info →
+//    Live Data Sources → Knowledge Gaps) — sources of truth the brain
+//    retrieves over, grouped contiguously. Business Info kept top-level
+//    (not nested under "Knowledge") per the Gate-1 K8 override from
+//    Phase 8 — these are daily operator actions and deserve top-level
+//    visibility.
+// 3. Config (Channels, Settings) — rare, sticky-bottom.
 const ITEMS: NavItem[] = [
   { href: (s) => `/${s}/dashboard`, label: "Dashboard", icon: LayoutDashboard, permission: "dashboard:view" },
   { href: (s) => `/${s}/conversations`, label: "Conversations", icon: MessageSquare, phase: 5, countKey: "conversations", permission: "conversations:view" },
+  { href: (s) => `/${s}/contacts`, label: "Contacts", icon: ContactRound, permission: "contacts:view" },
+  { href: (s) => `/${s}/playground`, label: "Playground", icon: Sparkles, phase: 4, permission: "playground:view" },
   { href: (s) => `/${s}/knowledge`, label: "Documents", icon: BookOpen, phase: 3, permission: "documents:view" },
   { href: (s) => `/${s}/knowledge/items`, label: "Products", icon: Package, phase: 8, permission: "products:view" },
   { href: (s) => `/${s}/knowledge/qna`, label: "Q&A", icon: MessageSquareText, phase: 8, permission: "qna:view" },
@@ -52,9 +61,7 @@ const ITEMS: NavItem[] = [
   { href: (s) => `/${s}/knowledge/live-data`, label: "Live Data Sources", icon: Database, phase: 8, permission: "live-data:view" },
   { href: (s) => `/${s}/knowledge/gaps`, label: "Knowledge Gaps", icon: HelpCircle, phase: 8, countKey: "gaps", permission: "knowledge-gaps:view" },
   { href: (s) => `/${s}/channels`, label: "Channels", icon: Plug, phase: 5, permission: "channels:view" },
-  { href: (s) => `/${s}/playground`, label: "Playground", icon: Sparkles, phase: 4, permission: "playground:view" },
   { href: (s) => `/${s}/settings`, label: "Settings", icon: Settings, permission: "settings:view" },
-  { href: (s) => `/${s}/contacts`, label: "Contacts", icon: ContactRound, permission: "contacts:view" },
 ];
 
 export type SidebarNavCounts = Partial<Record<CountKey, number>>;
