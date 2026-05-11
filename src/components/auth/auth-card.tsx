@@ -266,6 +266,14 @@ function BrandMark() {
         fill
         sizes="56px"
         priority
+        // The source PNG is intentionally large (2048×1999 @ ~2.3 MB) and
+        // Next.js's image optimizer trips on it during dev (its content-
+        // type sniffer returns null on this buffer, the request 400s, the
+        // <Image> falls back to the "W" glyph silently). At a 56×56 render
+        // size the optimizer adds no value anyway — the browser caches the
+        // raw PNG once and that's that. unoptimized=true serves the file
+        // straight from /public.
+        unoptimized
         className="object-contain"
         onError={() => setErrored(true)}
       />

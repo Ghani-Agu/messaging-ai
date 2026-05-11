@@ -46,7 +46,13 @@ export function PerfChart({ data }: PerfChartProps) {
         </div>
       </header>
       <div className="h-56">
-        <ResponsiveContainer width="100%" height="100%">
+        {/*
+          minWidth=0 silences Recharts's initial-mount warning where it
+          measures the parent before layout has settled and emits
+          "width(-1) and height(-1) of chart should be greater than 0".
+          Recommended by the warning text itself.
+        */}
+        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
           <AreaChart
             data={data}
             margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
