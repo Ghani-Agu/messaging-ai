@@ -60,5 +60,17 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // Skip middleware for:
+  //   - Next.js build assets (_next/static, _next/image)
+  //   - favicon.ico
+  //   - Anything that looks like a static file in /public (paths ending in
+  //     a common asset extension). Without this, the auth gate redirected
+  //     /wbp.png → /login?next=/wbp.png, the <Image> optimizer received
+  //     HTML instead of PNG bytes, and the brand mark silently fell back
+  //     to the "W" glyph. The negative-lookahead `.*\\.(?:…)$` lets us
+  //     keep the rest of the matcher route-shaped (no extension) while
+  //     punching a single hole for public assets.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|gif|webp|svg|ico|avif|css|js|map|woff|woff2|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|txt|xml|json|wasm)$).*)",
+  ],
 };

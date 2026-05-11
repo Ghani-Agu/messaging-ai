@@ -104,8 +104,20 @@ export function AuthCard({
         </div>
 
         <form action={signInWithGoogle} className="mb-4">
+          {/*
+            suppressHydrationWarning on every form-bearing element below
+            silences the React hydration mismatch that fires when a
+            password-manager / form-filler browser extension (Bitwarden,
+            LastPass, Edge autofill, etc.) injects `fdprocessedid` on
+            inputs and buttons BEFORE React hydrates. The attribute is
+            extension-side and benign — body-level
+            suppressHydrationWarning in app/layout.tsx doesn't reach
+            into the form because the suppression flag only covers one
+            level deep per React 19 docs.
+          */}
           <button
             type="submit"
+            suppressHydrationWarning
             className="inline-flex h-11 w-full items-center justify-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-elevated)] px-4 text-body font-medium text-[var(--text-primary)] transition-[background-color,border-color] duration-150 ease-out hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-overlay)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-base)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-base)]"
           >
             <GoogleIcon className="size-5" />
@@ -135,6 +147,7 @@ export function AuthCard({
                 placeholder="you@company.com"
                 disabled={pwPending}
                 aria-invalid={pwState.status === "error" ? true : undefined}
+                suppressHydrationWarning
                 className="block h-11 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3.5 text-body text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] transition-colors duration-150 ease-out hover:border-[var(--border-strong)] focus:border-[var(--accent-base)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-base)]/30 disabled:opacity-60 aria-[invalid=true]:border-[var(--danger)]"
               />
             </label>
@@ -157,6 +170,7 @@ export function AuthCard({
                 autoComplete="current-password"
                 disabled={pwPending}
                 aria-invalid={pwState.status === "error" ? true : undefined}
+                suppressHydrationWarning
                 className="block h-11 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3.5 text-body text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] transition-colors duration-150 ease-out hover:border-[var(--border-strong)] focus:border-[var(--accent-base)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-base)]/30 disabled:opacity-60 aria-[invalid=true]:border-[var(--danger)]"
               />
             </label>
@@ -167,7 +181,7 @@ export function AuthCard({
               </p>
             ) : null}
 
-            <MagneticButton type="submit" pending={pwPending}>
+            <MagneticButton type="submit" pending={pwPending} suppressHydrationWarning>
               {pwPending ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
@@ -191,6 +205,7 @@ export function AuthCard({
                 autoComplete="email"
                 placeholder="you@company.com"
                 disabled={pending}
+                suppressHydrationWarning
                 className="block h-11 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3.5 text-body text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] transition-colors duration-150 ease-out hover:border-[var(--border-strong)] focus:border-[var(--accent-base)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-base)]/30 disabled:opacity-60"
               />
             </label>
@@ -201,7 +216,7 @@ export function AuthCard({
               </p>
             ) : null}
 
-            <MagneticButton type="submit" pending={pending}>
+            <MagneticButton type="submit" pending={pending} suppressHydrationWarning>
               {pending ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
@@ -266,14 +281,6 @@ function BrandMark() {
         fill
         sizes="56px"
         priority
-        // The source PNG is intentionally large (2048×1999 @ ~2.3 MB) and
-        // Next.js's image optimizer trips on it during dev (its content-
-        // type sniffer returns null on this buffer, the request 400s, the
-        // <Image> falls back to the "W" glyph silently). At a 56×56 render
-        // size the optimizer adds no value anyway — the browser caches the
-        // raw PNG once and that's that. unoptimized=true serves the file
-        // straight from /public.
-        unoptimized
         className="object-contain"
         onError={() => setErrored(true)}
       />
