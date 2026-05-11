@@ -204,6 +204,11 @@ export async function POST(req: Request): Promise<Response> {
             tenantId,
             conversationId,
             reason: lastResult.escalation,
+            notificationContext: {
+              customerMessage: userMessage,
+              customerIdentifier: body.customerExternalId,
+              channel: "widget",
+            },
           });
         }
         // Phase 8g-2 / Gate-1 K6: caller-side, fire-and-forget gap log.

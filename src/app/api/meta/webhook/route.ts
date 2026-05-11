@@ -390,6 +390,13 @@ async function dispatchInboundMessage(args: {
       tenantId: channel.tenantId,
       conversationId: conversation.id,
       reason: result.escalation,
+      notificationContext: {
+        customerMessage: inbound.content,
+        customerIdentifier: inbound.customerExternalId,
+        // channelType is the ChannelType enum (MESSENGER | INSTAGRAM)
+        // disambiguated upstream by dispatchInboundMessage's caller.
+        channel: channelType === "MESSENGER" ? "messenger" : "instagram",
+      },
     });
   }
   // Phase 8g-2 / Gate-1 K6: caller-side, fire-and-forget gap log.

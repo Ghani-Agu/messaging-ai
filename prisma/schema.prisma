@@ -110,17 +110,25 @@ enum LiveDataSourceStatus {
   DISCONNECTED
 }
 
+// Type discriminator for Notification rows. Only AI_HANDOFF_REQUESTED is
+// produced today (Phase: notifications prompt 1); future event surfaces
+// (AGENT_ASSIGNED, KNOWLEDGE_GAP, MEMBER_INVITED, ...) get added here as
+// they ship without touching consumer code beyond the new switch case.
+enum NotificationType {
+  AI_HANDOFF_REQUESTED
+}
+
 model Tenant {
-  id               String       @id @default(cuid())
-  slug             String       @unique
+  id               String   @id @default(cuid())
+  slug             String   @unique
   name             String
   logoUrl          String?
   accentColor      String? // hex; falls back to the platform-default accent at the app layer
-  plan             Plan         @default(FREE)
-  stripeCustomerId String?      @unique
-  settings         Json         @default("{}")
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  plan             Plan     @default(FREE)
+  stripeCustomerId String?  @unique
+  settings         Json     @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   members          TenantUser[]
   lastUsedByUsers  User[]            @relation("UserLastTenant")
@@ -137,39 +145,42 @@ model Tenant {
   liveDataSources  LiveDataSource[]
   contacts         Contact[]
   invitations      Invitation[]
+  notifications    Notification[]
 
   @@index([slug])
 }
 
 model User {
-  id            String       @id @default(cuid())
-  email         String       @unique
-  emailVerified DateTime? // NextAuth
-  name          String?
-  image         String?
+  id               String    @id @default(cuid())
+  email            String    @unique
+  emailVerified    DateTime? // NextAuth
+  name             String?
+  image            String?
   // bcrypt hash for the Credentials provider. Null when the user only
   // ever signed in via Google OAuth or magic link. Set by the password
   // reset flow ("set your initial password" works against any existing
   // account regardless of how they originally signed up).
-  passwordHash  String?
+  passwordHash     String?
   // Platform-level admin flag — gates the /admin super-admin route. Toggled
   // out-of-band (e.g. via prisma studio); no self-service surface in v1.
-  isSuperAdmin  Boolean      @default(false)
+  isSuperAdmin     Boolean   @default(false)
   // Most-recently-active workspace, set on tenant switch and consulted by
   // /post-auth to decide where to land the user. Cleared if the tenant is
   // deleted (SetNull rather than Cascade).
   lastUsedTenantId String?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  tenants               TenantUser[]
-  accounts              Account[]
-  sessions              Session[]
-  passwordResetTokens   PasswordResetToken[]
-  invitations           Invitation[]   @relation("UserInvitedInvitations")
-  lastUsedTenant        Tenant?        @relation("UserLastTenant", fields: [lastUsedTenantId], references: [id], onDelete: SetNull)
-  assignedConversations Conversation[] @relation("ConversationAssignedUser")
-  sentMessages          Message[]      @relation("MessageSenderUser")
+  tenants                TenantUser[]
+  accounts               Account[]
+  sessions               Session[]
+  passwordResetTokens    PasswordResetToken[]
+  invitations            Invitation[]            @relation("UserInvitedInvitations")
+  lastUsedTenant         Tenant?                 @relation("UserLastTenant", fields: [lastUsedTenantId], references: [id], onDelete: SetNull)
+  assignedConversations  Conversation[]          @relation("ConversationAssignedUser")
+  sentMessages           Message[]               @relation("MessageSenderUser")
+  notifications          Notification[]
+  notificationPreference NotificationPreference?
 
   @@index([email])
 }
@@ -354,7 +365,7 @@ model KnowledgeChunk {
   // Postgres-generated column: to_tsvector('simple', content). 'simple' config (no
   // stemming, no stopwords) is required because we mix AR/FR/EN/Darija. Indexed via GIN.
   // Prisma never writes this column — the GENERATED ALWAYS clause makes it Postgres-managed.
-  searchVector Unsupported("tsvector")?    @default(dbgenerated("to_tsvector('simple'::regconfig, content)"))
+  searchVector Unsupported("tsvector")?     @default(dbgenerated("to_tsvector('simple'::regconfig, content)"))
   tokenCount   Int
   // Per-chunk: { url?: string, headingPath: string[], position: number, sourceType: SourceType }
   metadata     Json                         @default("{}")
@@ -462,6 +473,7 @@ model Conversation {
   assignedUser  User?          @relation("ConversationAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
   messages      Message[]
   knowledgeGaps KnowledgeGap[]
+  notifications Notification[]
 
   // Widget resume lookup: WHERE tenantId=? AND customerId=? AND status='ACTIVE' ORDER BY lastMessageAt DESC LIMIT 1
   @@index([tenantId, customerId, status, lastMessageAt(sort: Desc)])
@@ -472,16 +484,16 @@ model Conversation {
 }
 
 model Message {
-  id             String             @id @default(cuid())
-  conversationId String
-  tenantId       String
-  direction      MessageDirection
-  sender         MessageSender
-  senderUserId   String?
-  content        String
-  contentType    MessageContentType @default(TEXT)
-  mediaUrl       String?
-  aiMetadata     Json?
+  id                String             @id @default(cuid())
+  conversationId    String
+  tenantId          String
+  direction         MessageDirection
+  sender            MessageSender
+  senderUserId      String?
+  content           String
+  contentType       MessageContentType @default(TEXT)
+  mediaUrl          String?
+  aiMetadata        Json?
   // Phase 6: provider's message ID for non-widget channels (360dialog,
   // Meta Cloud, IG, FB). Two uses:
   //   1. INBOUND idempotency — webhook retries are common; dedupe by this
@@ -493,7 +505,7 @@ model Message {
   // (tenantId, providerMessageId) is partial-friendly: NULL rows are
   // skipped by the lookup query, so the index stays small.
   providerMessageId String?
-  createdAt      DateTime           @default(now())
+  createdAt         DateTime           @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -542,17 +554,17 @@ model Message {
 // list is updated for the new index names.
 
 model KnowledgeItem {
-  id           String  @id @default(cuid())
-  tenantId     String
+  id         String  @id @default(cuid())
+  tenantId   String
   // Display name shown in the dashboard and rendered into prompts.
-  name         String
+  name       String
   // Free-form taxonomy. Per Gate-1 decision A: loose now; per-category
   // form templates (and stricter validation) come later via specs._template_id
   // without a schema change.
-  category     String?
+  category   String?
   // Stable external identifier for future Odoo / CRM sync. NULL for items
   // created manually. Composite-unique with tenantId so re-imports dedupe.
-  externalId   String?
+  externalId String?
 
   sku          String?
   brand        String?
@@ -570,7 +582,7 @@ model KnowledgeItem {
   //   _template_id?: string — points to a category template for form
   //                            rendering; opaque at this layer.
   // All other keys are free-form spec fields (color, size, weight, etc.).
-  specs        Json    @default("{}")
+  specs Json @default("{}")
 
   // Voyage-3-large primary, OpenAI text-embedding-3-small fallback —
   // shared 1024-dim with KnowledgeChunk so the embed worker is provider-
@@ -581,11 +593,11 @@ model KnowledgeItem {
   // drift, but the actual GENERATED expression is defined in the migration
   // so it can include weighted concatenation across name / brand / sku /
   // description (CLAUDE.md §6 documents this pattern for KnowledgeChunk).
-  searchVector Unsupported("tsvector")? @default(dbgenerated("to_tsvector('simple'::regconfig, COALESCE(name, ''))"))
+  searchVector Unsupported("tsvector")?     @default(dbgenerated("to_tsvector('simple'::regconfig, COALESCE(name, ''))"))
 
   // Phase 8 freshness signal — same semantics as KnowledgeSource.lastVerifiedAt:
   // operator-asserted "still correct," distinct from updatedAt.
-  lastVerifiedAt DateTime?
+  lastVerifiedAt    DateTime?
   // ── Live Data Source sync fields (Live Data feature, 2026-05-06) ──
   // When this item was sourced from an ERP poll (e.g. Odoo), liveDataSourceId
   // points at the LiveDataSource row that owns the row's lifecycle and
@@ -601,8 +613,8 @@ model KnowledgeItem {
   lastSyncedAt      DateTime?
   quantityOnHand    Int?
   quantityAvailable Int?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   liveDataSource LiveDataSource? @relation(fields: [liveDataSourceId], references: [id], onDelete: SetNull)
@@ -629,7 +641,7 @@ model KnowledgeItem {
 }
 
 model QnaPair {
-  id                 String  @id @default(cuid())
+  id                 String   @id @default(cuid())
   tenantId           String
   // The canonical question text shown in the dashboard.
   question           String
@@ -649,26 +661,26 @@ model QnaPair {
   // Author-asserted language of the question — supported codes match
   // SUPPORTED_LANGUAGES in src/lib/validators.ts (ar / fr / en / darija).
   // Null = "unspecified," matched cross-language regardless of languageLock.
-  language           String?
+  language     String?
   // Per Gate-1 decision C (override): when true, this Q&A only matches
   // queries the brain detects to be in `language`. Default off — most
   // tenants want a French Q&A to fire on an Arabic question with the
   // brain handling translation in the reply.
-  languageLock       Boolean  @default(false)
+  languageLock Boolean @default(false)
 
   // Optional provenance — where the canonical answer came from.
-  sourceUrl          String?
+  sourceUrl String?
 
   // Same 1024-dim shared-vector pattern. Embeds the QUESTION, not the
   // answer — semantic match is on what the customer asked.
-  questionEmbedding  Unsupported("vector(1024)")?
+  questionEmbedding Unsupported("vector(1024)")?
 
   // Operator-asserted "still correct" timestamp; freshness display.
-  lastVerifiedAt     DateTime?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  lastVerifiedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // Composite unique enforces dedupe per tenant. Two operators pasting
   // "What are your hours?" and "what are your hours?" both normalize to
@@ -685,18 +697,18 @@ model QnaPair {
 // few-shot text. At least one of phone / email must be present (enforced at
 // the Zod layer, not the DB — both columns stay nullable for flexibility).
 model Contact {
-  id        String   @id @default(cuid())
-  tenantId  String
-  name      String   // e.g. "Sales team" / "Mohamed Karim"
-  phone     String?  // free-form (international formats vary; no validation)
-  email     String?  // standard email format (Zod-validated at write time)
-  role      String?  // free-form label: "Sales" / "Support" / "Returns"
-  position  Int      @default(0) // operator-set ordering; lower first
+  id       String  @id @default(cuid())
+  tenantId String
+  name     String // e.g. "Sales team" / "Mohamed Karim"
+  phone    String? // free-form (international formats vary; no validation)
+  email    String? // standard email format (Zod-validated at write time)
+  role     String? // free-form label: "Sales" / "Support" / "Returns"
+  position Int     @default(0) // operator-set ordering; lower first
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
 }
@@ -714,11 +726,11 @@ model OperationalFacts {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model KnowledgeGap {
-  id             String        @id @default(cuid())
+  id             String  @id @default(cuid())
   tenantId       String
   // Optional: the conversation that produced this gap. SetNull (not Cascade)
   // so the digest survives conversation deletion — the gap question itself
@@ -727,28 +739,28 @@ model KnowledgeGap {
 
   // The customer's unanswered question. Stored verbatim (the operator
   // sees what was actually said, including language / register).
-  question       String
+  question String
   // Brain-detected language of the question, when available.
-  language       String?
+  language String?
 
   // Embedding of `question`, used by the P8g clusterer to group similar
   // questions (cosine similarity > 0.85, simple greedy clustering within
   // the last 30 days per Gate-1 risk discussion). Null until the embed
   // job runs.
-  embedding      Unsupported("vector(1024)")?
+  embedding Unsupported("vector(1024)")?
 
   // Set by the clusterer; null until clustered. Same value across all
   // gaps in a cluster. Indexed for the digest list.
-  clusterKey     String?
+  clusterKey String?
   // Operator dismisses or marks as resolved (e.g. after creating a Q&A
   // from the gap, per Gate-1 D).
-  resolved       Boolean       @default(false)
-  resolvedAt     DateTime?
+  resolved   Boolean   @default(false)
+  resolvedAt DateTime?
 
-  createdAt      DateTime      @default(now())
+  createdAt DateTime @default(now())
 
-  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
   // Digest list: WHERE tenantId=? AND resolved=false ORDER BY createdAt DESC
   @@index([tenantId, resolved, createdAt(sort: Desc)])
@@ -799,4 +811,69 @@ model LiveDataSource {
 
   @@index([tenantId])
   @@index([status])
+}
+
+// =====================================================================
+// Notifications (event-driven, fan-out to TenantUsers)
+// =====================================================================
+//
+// Fired when the AI flags a conversation for human handoff. Two surfaces:
+//   - In-app: always on; consumed by the dashboard's bell (later prompt).
+//   - Email:  per-user opt-out via NotificationPreference (default ON).
+//             Email transport lands in a later prompt — schema only here.
+//
+// Tenant disambiguation rule (load-bearing):
+//   `userId` references User.id, NOT TenantUser.id. A single human can be
+//   a member of multiple tenants and the User row is shared. Every query
+//   against Notification MUST include `tenantId` alongside `userId` —
+//   filtering on userId alone would leak tenant A's notifications into
+//   tenant B's UI for the same human. The [tenantId, userId, *] indexes
+//   below are structured so that filter ordering is the fast path.
+
+model Notification {
+  id             String           @id @default(cuid())
+  tenantId       String
+  // Recipient User.id — see section header for the tenantId-must-be-in-
+  // every-query constraint this introduces. The createMany in
+  // src/server/notifications/create.ts writes tenantId on every row.
+  userId         String
+  type           NotificationType
+  // Conversation that triggered the row, when applicable. SetNull (not
+  // Cascade) so a notification survives conversation deletion — the
+  // user's read state is what matters; the link just goes dark. Mirrors
+  // KnowledgeGap.conversationId.
+  conversationId String?
+  // Short headline, e.g. "AI requested human handoff".
+  title          String
+  // 1-2 sentence summary, composed by composeHandoffSummary at the
+  // trigger site. Same string is reused by the (future) email template
+  // so in-app + email never drift in copy.
+  body           String
+  readAt         DateTime?
+  createdAt      DateTime         @default(now())
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  // Unread bell query: WHERE tenantId=? AND userId=? AND readAt IS NULL.
+  @@index([tenantId, userId, readAt])
+  // Full list query: WHERE tenantId=? AND userId=? ORDER BY createdAt DESC.
+  @@index([tenantId, userId, createdAt])
+}
+
+// Per-user notification preferences. Lazily created on first toggle — the
+// absence of a row means defaults (email opt-in, in-app always on). One
+// row per User, scoped globally across tenants (a person who wants email
+// off, wants it off everywhere).
+model NotificationPreference {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  // Per-spec: email is opt-out (default ON). Set false when the user
+  // disables handoff email notifications.
+  emailOnHandoff Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

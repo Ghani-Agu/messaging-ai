@@ -297,6 +297,11 @@ async function dispatchInboundMessage(args: {
       tenantId: channel.tenantId,
       conversationId: conversation.id,
       reason: result.escalation,
+      notificationContext: {
+        customerMessage: inbound.content,
+        customerIdentifier: inbound.customerPhoneNumber,
+        channel: "whatsapp",
+      },
     });
   }
   // Phase 8g-2 / Gate-1 K6: caller-side, fire-and-forget. logGapIfOutsideScope

@@ -14,6 +14,10 @@ import type { EscalationReason } from "@/server/ai/confidence";
 import type { SupportedReplyLanguage } from "@/server/ai/claude-client";
 import type { BrainCitation } from "@/server/ai/orchestrator";
 import type { HistoryTurn } from "@/server/ai/prompts/system";
+import {
+  createHandoffNotifications,
+  type HandoffNotificationContext,
+} from "@/server/notifications/create";
 
 /**
  * Phase-6 Conversation / Customer / Message DB helper layer. All app code
@@ -642,24 +646,38 @@ export async function recordAiMessage(args: {
 }
 
 /**
- * Mark a conversation as needing human handoff. Phase 6: flips status to
- * HUMAN_HANDLING and aiEnabled to false so the brain stops auto-replying.
- * Phase 8 will replace this with an Escalation row + agent notification;
- * keeping this as a separate helper preserves the seam.
+ * Mark a conversation as needing human handoff. Flips status to
+ * HUMAN_HANDLING + aiEnabled=false so the brain stops auto-replying, and
+ * fans out an in-app notification to every tenant member with
+ * `conversations:view` (createHandoffNotifications composes the body from
+ * the supplied notificationContext).
+ *
+ * `notificationContext` is REQUIRED — the only caller path that reaches
+ * here is escalation from a real customer turn (widget / meta / whatsapp
+ * webhook routes); the playground does NOT escalate, so there's no
+ * legitimate caller that lacks the context. Forcing it at the type level
+ * means a future caller can't quietly bypass the notification fan-out.
  */
 export async function markConversationForHandoff(args: {
   tenantId: string;
   conversationId: string;
   reason: EscalationReason;
+  notificationContext: HandoffNotificationContext;
 }): Promise<void> {
   await prisma.conversation.updateMany({
     where: { id: args.conversationId, tenantId: args.tenantId },
     data: {
       status: "HUMAN_HANDLING",
       aiEnabled: false,
-      // Stash the reason in metadata until Phase 8 lands the Escalation row.
+      // Stash the reason in metadata until a dedicated Escalation row lands.
       metadata: { lastEscalationReason: args.reason },
     },
+  });
+  await createHandoffNotifications({
+    tenantId: args.tenantId,
+    conversationId: args.conversationId,
+    reason: args.reason,
+    context: args.notificationContext,
   });
 }
 
