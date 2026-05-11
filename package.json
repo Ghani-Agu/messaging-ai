@@ -40,7 +40,7 @@
     "widget:build": "npm run widget:check-tokens && npm --workspace @messaging-ai/widget run build",
     "widget:tokens": "tsx scripts/generate-widget-tokens.ts",
     "widget:check-tokens": "tsx scripts/generate-widget-tokens.ts --check",
-    "prepare": "simple-git-hooks"
+    "prepare": "node -e \"if(!process.env.CI){require('child_process').execSync('simple-git-hooks',{stdio:'inherit'})}\""
   },
   "simple-git-hooks": {
     "pre-commit": "npm run widget:check-tokens"
