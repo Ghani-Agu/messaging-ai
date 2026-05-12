@@ -11,12 +11,20 @@ const PUBLIC_PATHS = new Set<string>([
   "/login",
   "/signup",
   "/verify-request",
+  "/reset-password",
+  "/post-auth",
 ]);
 
 const PUBLIC_PREFIXES = [
   "/api/auth/",
+  "/api/meta/",
+  "/api/whatsapp/",
+  "/api/widget/",
+  "/api/cron/",
+  "/reset-password/",
+  "/invitations/",
   "/_next/",
-  "/favicon.ico",
+  "/favicon.",
 ];
 
 const SESSION_COOKIES = [
